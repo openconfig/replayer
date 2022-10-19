@@ -256,3 +256,73 @@ func TestTimeseries(t *testing.T) {
 		})
 	}
 }
+
+func TestSchedule(t *testing.T) {
+	tests := []struct {
+		desc         string
+		inTimeseries timeseries
+		want         []*event
+		wantErr      bool
+	}{{
+		desc: "two events",
+		inTimeseries: timeseries{
+			time.Unix(100, 0): []*spb.ModifyRequest{
+				{ElectionId: &spb.Uint128{Low: 100}},
+			},
+			time.Unix(200, 0): []*spb.ModifyRequest{
+				{ElectionId: &spb.Uint128{Low: 200}},
+			},
+		},
+		want: []*event{{
+			Events: []*spb.ModifyRequest{
+				{ElectionId: &spb.Uint128{Low: 100}},
+			},
+		}, {
+			DelayBefore: 100 * time.Second,
+			Events: []*spb.ModifyRequest{
+				{ElectionId: &spb.Uint128{Low: 200}},
+			},
+		}},
+	}, {
+		desc: "events with non-uniform spacing",
+		inTimeseries: timeseries{
+			time.Unix(100, 0): []*spb.ModifyRequest{
+				{ElectionId: &spb.Uint128{Low: 100}},
+			},
+			time.Unix(101, 0): []*spb.ModifyRequest{
+				{ElectionId: &spb.Uint128{Low: 200}},
+			},
+			time.Unix(120, 0): []*spb.ModifyRequest{
+				{ElectionId: &spb.Uint128{Low: 300}},
+			},
+		},
+		want: []*event{{
+			Events: []*spb.ModifyRequest{
+				{ElectionId: &spb.Uint128{Low: 100}},
+			},
+		}, {
+			DelayBefore: 1 * time.Second,
+			Events: []*spb.ModifyRequest{
+				{ElectionId: &spb.Uint128{Low: 200}},
+			},
+		}, {
+			DelayBefore: 19 * time.Second,
+			Events: []*spb.ModifyRequest{
+				{ElectionId: &spb.Uint128{Low: 300}},
+			},
+		}},
+	}}
+
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			got, err := Schedule(tt.inTimeseries)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("did not get expected error, got: %v, wantErr? %v", err, tt.wantErr)
+			}
+
+			if diff := cmp.Diff(got, tt.want, cmpopts.EquateEmpty(), protocmp.Transform()); diff != "" {
+				t.Fatalf("did not get expected schedule, diff(-got,+want):\n%s", diff)
+			}
+		})
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"sort"
 	"time"
 
 	"google.golang.org/protobuf/encoding/prototext"
@@ -89,4 +90,39 @@ func Timeseries(pb []*lpb.GrpcLogEntry, timeQuantum time.Duration) (timeseries, 
 		ts[timeBucket] = append(ts[timeBucket], m)
 	}
 	return ts, nil
+}
+
+// event is a datapoint within a replay stream. When events are replayed
+// the replayer implementation should initially sleep for the period
+// indicated by DelayBefore and then replay out the Events specified.
+type event struct {
+	// DelayBefore is the duration for which the replayer should sleep
+	// before replaying these events immediately after having played
+	// out the prior event.
+	DelayBefore time.Duration
+	// Events is the set of ModifyRequests that should be played out
+	// for specific event. The messages should be replayed in the
+	// specified order, with no delay between them.
+	Events []*spb.ModifyRequest
+}
+
+// Schedule takes an input timeseries and converts it to a slice of
+// events to be replayed.
+func Schedule(ts timeseries) ([]*event, error) {
+	times := []time.Time{}
+	for t := range ts {
+		times = append(times, t)
+	}
+	sort.Slice(times, func(i, j int) bool { return times[i].Before(times[j]) })
+
+	prev := times[0]
+	sched := []*event{}
+	for _, t := range times {
+		sched = append(sched, &event{
+			DelayBefore: t.Sub(prev),
+			Events:      ts[t],
+		})
+		prev = t
+	}
+	return sched, nil
 }
