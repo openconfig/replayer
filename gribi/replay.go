@@ -2,11 +2,16 @@ package replay
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"sort"
+	"testing"
 	"time"
 
+	log "github.com/golang/glog"
+	"github.com/openconfig/gribigo/client"
+	"github.com/openconfig/gribigo/fluent"
 	"google.golang.org/protobuf/encoding/prototext"
 	"google.golang.org/protobuf/proto"
 
@@ -125,4 +130,37 @@ func Schedule(ts timeseries) ([]*event, error) {
 		prev = t
 	}
 	return sched, nil
+}
+
+// awaitTimeout waits for the client c to converge, waiting for the specified
+// timeout.
+func awaitTimeout(ctx context.Context, c *fluent.GRIBIClient, t testing.TB, timeout time.Duration) error {
+	subctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return c.Await(subctx, t)
+}
+
+// Do replays the contents of the schedule (sched) provided using the specified
+// gRIBI Client c. The timeMultiplier is used in order to multiply the delays
+// specified in the event stream. The specified timeout is used to determine
+// how long the server takes to converge following the events.
+func Do(ctx context.Context, t testing.TB, c *fluent.GRIBIClient, sched []*event, timeMultiplier int, timeout time.Duration) []*client.OpResult {
+	c.Start(ctx, t)
+	defer c.Stop(t)
+	c.StartSending(ctx, t)
+	if err := awaitTimeout(ctx, c, t, timeout); err != nil {
+		t.Fatalf("got unexpected error from server - session negotiation, got: %v, want: nil", err)
+	}
+
+	for _, s := range sched {
+		extendedTime := s.DelayBefore * time.Duration(timeMultiplier)
+		log.Infof("sleeping %s (exaggerated)\n", extendedTime)
+		time.Sleep(extendedTime)
+		log.Infof("sending %v\n", s.Events)
+		c.Modify().Enqueue(t, s.Events...)
+	}
+	if err := awaitTimeout(ctx, c, t, timeout); err != nil {
+		t.Fatalf("got unexpected error from server - session negotiation, got: %v, want: nil", err)
+	}
+	return c.Results(t)
 }
