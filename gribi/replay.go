@@ -4,10 +4,13 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"sort"
+	"time"
 
 	"google.golang.org/protobuf/encoding/prototext"
 	"google.golang.org/protobuf/proto"
 
+	spb "github.com/openconfig/gribi/v1/proto/service"
 	logpb "github.com/openconfig/replayer/proto/log"
 	lpb "google.golang.org/grpc/binarylog/grpc_binarylog_v1"
 )
@@ -49,4 +52,77 @@ func FromTextprotoFile(fn string) ([]*lpb.GrpcLogEntry, error) {
 		msgs = append(msgs, p)
 	}
 	return msgs, nil
+}
+
+// timeseries is a series of gRIBI ModifyRequests bucketed by their start time.
+type timeseries map[time.Time][]*spb.ModifyRequest
+
+// Timeseries takes a slice of GrpcLogEntry binary entries, and a specified
+// duration used to bucket those events, and returns a timeseries of the events
+// broken down by time. The timeQuantum is used to group events that occcur
+// within a specific window - e.g., if this value is set as 100 milliseconds,
+// then all events that occur within 100ms of the first event are grouped into
+// the same bucket.
+//
+// Timeseries filters events to be the client messages and expects the slice to
+// contain only gRIBI ModifyRequests.
+func Timeseries(pb []*lpb.GrpcLogEntry, timeQuantum time.Duration) (timeseries, error) {
+	ts := timeseries{}
+	timeBucket := time.Unix(0, 0)
+	for _, p := range pb {
+		if p.Type != lpb.GrpcLogEntry_EVENT_TYPE_CLIENT_MESSAGE {
+			continue
+		}
+
+		if p.GetTimestamp() == nil {
+			return nil, fmt.Errorf("invalid protobuf with nil timestamp, %s", p)
+		}
+
+		eventTime := time.Unix(p.Timestamp.Seconds, int64(p.Timestamp.Nanos))
+		if eventTime.Sub(timeBucket) >= timeQuantum {
+			timeBucket = eventTime
+		}
+
+		m := &spb.ModifyRequest{}
+		if err := proto.Unmarshal(p.GetMessage().GetData(), m); err != nil {
+			return nil, fmt.Errorf("cannot unmarshal ModifyRequest %s, %v", p, err)
+		}
+		ts[timeBucket] = append(ts[timeBucket], m)
+	}
+	return ts, nil
+}
+
+// event is a datapoint within a replay stream. When events are replayed
+// the replayer implementation should initially sleep for the period
+// indicated by DelayBefore and then replay out the Events specified.
+type event struct {
+	// DelayBefore is the duration for which the replayer should sleep
+	// before replaying these events immediately after having played
+	// out the prior event.
+	DelayBefore time.Duration
+	// Events is the set of ModifyRequests that should be played out
+	// for specific event. The messages should be replayed in the
+	// specified order, with no delay between them.
+	Events []*spb.ModifyRequest
+}
+
+// Schedule takes an input timeseries and converts it to a slice of
+// events to be replayed.
+func Schedule(ts timeseries) ([]*event, error) {
+	times := []time.Time{}
+	for t := range ts {
+		times = append(times, t)
+	}
+	sort.Slice(times, func(i, j int) bool { return times[i].Before(times[j]) })
+
+	prev := times[0]
+	sched := []*event{}
+	for _, t := range times {
+		sched = append(sched, &event{
+			DelayBefore: t.Sub(prev),
+			Events:      ts[t],
+		})
+		prev = t
+	}
+	return sched, nil
 }
