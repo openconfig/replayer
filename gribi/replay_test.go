@@ -1,7 +1,6 @@
 package replay
 
 import (
-	"fmt"
 	"testing"
 	"time"
 
