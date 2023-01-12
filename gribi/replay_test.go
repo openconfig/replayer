@@ -103,7 +103,6 @@ func TestFromLogProto(t *testing.T) {
 		t.Run(tt.desc, func(t *testing.T) {
 			got, err := FromLogProto(tt.inFilename)
 			if (err != nil) != tt.wantErr {
-				fmt.Printf("%s\n", got)
 				t.Fatalf("did not get expected error, got: %v, wantErr? %v", err, tt.wantErr)
 			}
 
