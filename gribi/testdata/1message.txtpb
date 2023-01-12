@@ -1,0 +1,1 @@
+timestamp:{seconds:1665546126  nanos:981745000}  call_id:1  sequence_id_within_call:1  type:EVENT_TYPE_CLIENT_HEADER  logger:LOGGER_CLIENT  client_header:{metadata:{}  method_name:"/gribi.gRIBI/Modify"  authority:"127.0.0.1:51852"}
