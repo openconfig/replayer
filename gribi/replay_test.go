@@ -2,7 +2,6 @@ package replay
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -117,7 +116,6 @@ func TestFromLogProto(t *testing.T) {
 		t.Run(tt.desc, func(t *testing.T) {
 			got, err := FromLogProto(tt.inFilename)
 			if (err != nil) != tt.wantErr {
-				fmt.Printf("%s\n", got)
 				t.Fatalf("did not get expected error, got: %v, wantErr? %v", err, tt.wantErr)
 			}
 
@@ -143,13 +141,13 @@ func TestTimeseries(t *testing.T) {
 	})
 
 	makeStream := func(baseTime, numMsg int) []*lpb.GrpcLogEntry {
-		modifyStream := []*lpb.GrpcLogEntry{}
+		stream := []*lpb.GrpcLogEntry{}
 		for i := 1; i <= numMsg; i++ {
 			d := mustMarshal(t, &spb.ModifyRequest{
 				ElectionId: &spb.Uint128{Low: uint64(i)},
 			})
 
-			modifyStream = append(modifyStream, &lpb.GrpcLogEntry{
+			stream = append(stream, &lpb.GrpcLogEntry{
 				Timestamp: &tspb.Timestamp{Seconds: int64(baseTime + i)},
 				Type:      lpb.GrpcLogEntry_EVENT_TYPE_CLIENT_MESSAGE,
 				Payload: &lpb.GrpcLogEntry_Message{
@@ -159,7 +157,7 @@ func TestTimeseries(t *testing.T) {
 				},
 			})
 		}
-		return modifyStream
+		return stream
 	}
 
 	tests := []struct {

@@ -20,7 +20,7 @@ import (
 	lpb "google.golang.org/grpc/binarylog/grpc_binarylog_v1"
 )
 
-// FromLogProto reads a logpb.Events message from the specified file name and
+// FromLogProto reads binary logpb.Events messages from the specified file name and
 // returns the set of GrpcLogEntry gRPC binary log messags that are stored in
 // it. It returns an error if one is encountered reading or unmarshalling the
 // protobuf.
