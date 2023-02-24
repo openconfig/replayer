@@ -1,16 +1,25 @@
 package replay
 
 import (
-	"fmt"
+	"context"
 	"testing"
 	"time"
 
+	log "github.com/golang/glog"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
-	spb "github.com/openconfig/gribi/v1/proto/service"
+	"github.com/openconfig/gribigo/client"
+	"github.com/openconfig/gribigo/device"
+	"github.com/openconfig/gribigo/fluent"
+	"github.com/openconfig/gribigo/ocrt"
+	"github.com/openconfig/gribigo/server"
+	"github.com/openconfig/gribigo/testcommon"
+	"github.com/openconfig/testt"
+	"github.com/openconfig/ygot/ygot"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 
+	spb "github.com/openconfig/gribi/v1/proto/service"
 	lpb "google.golang.org/grpc/binarylog/grpc_binarylog_v1"
 	tspb "google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -132,13 +141,13 @@ func TestTimeseries(t *testing.T) {
 	})
 
 	makeStream := func(baseTime, numMsg int) []*lpb.GrpcLogEntry {
-		modifyStream := []*lpb.GrpcLogEntry{}
+		stream := []*lpb.GrpcLogEntry{}
 		for i := 1; i <= numMsg; i++ {
 			d := mustMarshal(t, &spb.ModifyRequest{
 				ElectionId: &spb.Uint128{Low: uint64(i)},
 			})
 
-			modifyStream = append(modifyStream, &lpb.GrpcLogEntry{
+			stream = append(stream, &lpb.GrpcLogEntry{
 				Timestamp: &tspb.Timestamp{Seconds: int64(baseTime + i)},
 				Type:      lpb.GrpcLogEntry_EVENT_TYPE_CLIENT_MESSAGE,
 				Payload: &lpb.GrpcLogEntry_Message{
@@ -148,7 +157,7 @@ func TestTimeseries(t *testing.T) {
 				},
 			})
 		}
-		return modifyStream
+		return stream
 	}
 
 	tests := []struct {
@@ -321,6 +330,95 @@ func TestSchedule(t *testing.T) {
 
 			if diff := cmp.Diff(got, tt.want, cmpopts.EquateEmpty(), protocmp.Transform()); diff != "" {
 				t.Fatalf("did not get expected schedule, diff(-got,+want):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestDo(t *testing.T) {
+	tests := []struct {
+		desc      string
+		in        []*event
+		inExpand  int
+		inTimeout time.Duration
+		want      []*client.OpResult
+		wantFatal bool
+	}{{
+		desc: "mixed series of events",
+		in: []*event{{
+			Events: []*spb.ModifyRequest{
+				{
+					Params: &spb.SessionParameters{
+						Redundancy:  spb.SessionParameters_SINGLE_PRIMARY,
+						Persistence: spb.SessionParameters_PRESERVE,
+					},
+				},
+			},
+		}, {
+			DelayBefore: 1 * time.Second,
+			Events: []*spb.ModifyRequest{
+				{ElectionId: &spb.Uint128{Low: 100}},
+			},
+		}},
+		inTimeout: 20 * time.Second,
+		want: []*client.OpResult{{
+			SessionParameters: &spb.SessionParametersResult{
+				Status: spb.SessionParametersResult_OK,
+			},
+		}, {
+			CurrentServerElectionID: &spb.Uint128{Low: 100},
+		}},
+	}, {
+		desc: "error at server",
+		in: []*event{{
+			DelayBefore: 1 * time.Second,
+			Events: []*spb.ModifyRequest{
+				{ElectionId: &spb.Uint128{Low: 100}},
+			},
+		}},
+		inTimeout: 20 * time.Second,
+		wantFatal: true,
+	}}
+
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			creds, err := device.TLSCredsFromFile(testcommon.TLSCreds())
+			if err != nil {
+				log.Fatalf("cannot load credentials, got err: %v", err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+
+			defer cancel()
+
+			cfg := &ocrt.Device{}
+			cfg.GetOrCreateNetworkInstance(server.DefaultNetworkInstanceName).Type = ocrt.NetworkInstanceTypes_NETWORK_INSTANCE_TYPE_DEFAULT_INSTANCE
+			jsonConfig, err := ygot.Marshal7951(cfg)
+			if err != nil {
+				log.Exitf("cannot create configuration for device, error: %v", err)
+			}
+
+			d, err := device.New(ctx, creds, device.DeviceConfig(jsonConfig))
+			if err != nil {
+				log.Exitf("cannot start server, %v", err)
+			}
+
+			c := fluent.NewClient()
+			c.Connection().WithTarget(d.GRIBIAddr())
+
+			if tt.wantFatal {
+				if got := testt.ExpectFatal(t, func(t testing.TB) {
+					Do(ctx, t, c, tt.in, tt.inExpand, tt.inTimeout)
+				}); len(got) == 0 {
+					t.Fatalf("did not get expected fatal error, got: no error")
+				}
+				return
+			}
+
+			got := Do(ctx, t, c, tt.in, tt.inExpand, tt.inTimeout)
+			if diff := cmp.Diff(got, tt.want,
+				protocmp.Transform(),
+				cmpopts.IgnoreFields(client.OpResult{}, "Timestamp", "Latency")); diff != "" {
+				t.Fatalf("did not get expected diff, diff(-got,+want):\n%s", diff)
 			}
 		})
 	}
