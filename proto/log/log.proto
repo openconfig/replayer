@@ -24,7 +24,7 @@ option go_package = "github.com/openconfig/replayer/proto/log_v1";
 // Events is a series of events that constitute a data point within
 // a log.
 message Events {
-    // grpc_events is a series of gRPC events represented as binary
-    // log protobufs.
-    repeated grpc.binarylog.v1.GrpcLogEntry grpc_events = 1;
+  // grpc_events is a series of gRPC events represented as binary
+  // log protobufs.
+  repeated grpc.binarylog.v1.GrpcLogEntry grpc_events = 1;
 }

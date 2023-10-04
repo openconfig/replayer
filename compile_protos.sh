@@ -15,5 +15,20 @@
 # limitations under the License.
 
 # Go
-proto_imports_go=".:${GOPATH}/src"
-protoc -I="$proto_imports_go" --go_out=. --go_opt=paths=source_relative proto/log/log.proto
+if ! which protoc-gen-go > /dev/null; then
+  echo Installing protoc-gen-go
+  go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+fi
+
+if [ -z $SRCDIR ]; then
+	SRCDIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
+fi
+
+cd ${SRCDIR}
+
+echo Fetching proto dependencies
+curl --create-dirs -o proto/build_deps/github.com/grpc/grpc-proto/grpc/binlog/v1/binarylog.proto https://raw.githubusercontent.com/grpc/grpc-proto/master/grpc/binlog/v1/binarylog.proto
+
+protoc -I=".:./proto/build_deps" --go_out=. --go_opt=paths=source_relative proto/log/log.proto
+
+rm -rf proto/build_deps
