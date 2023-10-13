@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -32,6 +31,7 @@ import (
 	"github.com/openconfig/gribigo/client"
 	"github.com/openconfig/ygot/util"
 	"github.com/openconfig/ygot/ygot"
+	"golang.org/x/exp/slices"
 	"google.golang.org/protobuf/encoding/prototext"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
@@ -39,6 +39,7 @@ import (
 	gnmipb "github.com/openconfig/gnmi/proto/gnmi"
 	gribipb "github.com/openconfig/gribi/v1/proto/service"
 	lpb "github.com/openconfig/replayer/proto/log"
+	p4pb "github.com/p4lang/p4runtime/go/p4/v1"
 )
 
 //go:generate ./compile_protos.sh
@@ -257,30 +258,26 @@ func Parse(path string) (*Recording, error) {
 
 		switch v := m.(type) {
 		case *gnmipb.GetResponse:
-			counts["gNMI GetResponse"]++
 			if r.snapshot.gnmiGet == nil {
 				r.snapshot.gnmiGet = v
 			}
 		case *gribipb.GetResponse:
-			counts["gRIBI GetResponse"]++
 			if r.snapshot.gribi == nil {
 				r.snapshot.gribi = v
 			}
 			r.finalGRIBI = v
 		case *gnmipb.SetRequest:
-			counts["gNMI SetRequest"]++
 			if r.snapshot.gnmiSet == nil {
 				r.snapshot.gnmiSet = v
 			} else {
 				r.events = append(r.events, &event{message: v, timestamp: timestamp})
 			}
-		case *gribipb.ModifyRequest:
-			counts["gRIBI ModifyRequest"]++
+		case *gribipb.ModifyRequest, *p4pb.PacketOut, *p4pb.WriteRequest:
 			r.events = append(r.events, &event{message: v, timestamp: timestamp})
 		default:
-			counts["unsupported"]++
 			log.Errorf("Unsupported message type: %T, %v", v, v)
 		}
+		counts[fmt.Sprintf("%T", m)]++
 
 	}
 	log.Infof("Parsed binary log with request counts:\n%v", pretty.Sprint(counts))
@@ -334,6 +331,8 @@ func unmarshal(data []byte) (proto.Message, error) {
 		new(gnmipb.SubscribeResponse),
 		new(gribipb.GetResponse),
 		new(gribipb.ModifyRequest),
+		new(p4pb.PacketOut),
+		new(p4pb.WriteRequest),
 	}
 
 	for _, m := range messages {

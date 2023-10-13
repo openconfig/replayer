@@ -38,6 +38,7 @@ import (
 
 	gnmipb "github.com/openconfig/gnmi/proto/gnmi"
 	gribipb "github.com/openconfig/gribi/v1/proto/service"
+	p4pb "github.com/p4lang/p4runtime/go/p4/v1"
 )
 
 const (
@@ -128,6 +129,25 @@ func TestParse(t *testing.T) {
 							},
 						},
 						timestamp: time.Unix(7, 0),
+					},
+					{
+						message: &p4pb.WriteRequest{
+							DeviceId: 1234,
+							Role:     "test_role",
+						},
+						timestamp: time.Unix(9, 0),
+					},
+					{
+						message: &p4pb.PacketOut{
+							Payload: []byte("test payload"),
+							Metadata: []*p4pb.PacketMetadata{
+								{
+									MetadataId: 321,
+									Value:      []byte("abc"),
+								},
+							},
+						},
+						timestamp: time.Unix(10, 0),
 					},
 				},
 				finalGRIBI: &gribipb.GetResponse{
