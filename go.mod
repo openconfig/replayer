@@ -1,6 +1,6 @@
 module github.com/openconfig/replayer
 
-go 1.22
+go 1.19
 
 require (
 	github.com/golang/glog v1.1.2
