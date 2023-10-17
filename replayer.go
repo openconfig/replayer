@@ -20,6 +20,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -234,6 +236,25 @@ func Parse(path string) (*Recording, error) {
 	if err != nil {
 		return nil, err
 	}
+	return ParseBytes(bytes)
+}
+
+// ParseURL parses an SFE binary log at the specified URL.
+func ParseURL(path string) (*Recording, error) {
+	resp, err := http.Get(path)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	bytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	return ParseBytes(bytes)
+}
+
+// ParseBytes parses an SFE binary log with the specified bytes.
+func ParseBytes(bytes []byte) (*Recording, error) {
 	events := new(lpb.Events)
 	if err := proto.Unmarshal(bytes, events); err != nil {
 		return nil, err
