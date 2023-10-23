@@ -27,13 +27,14 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/exp/slices"
+
 	log "github.com/golang/glog"
 	"github.com/google/go-cmp/cmp"
 	"github.com/kylelemons/godebug/pretty"
 	"github.com/openconfig/gribigo/client"
 	"github.com/openconfig/ygot/util"
 	"github.com/openconfig/ygot/ygot"
-	"golang.org/x/exp/slices"
 	"google.golang.org/protobuf/encoding/prototext"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
@@ -272,7 +273,7 @@ func ParseBytes(bytes []byte) (*Recording, error) {
 		data := entry.GetMessage().GetData()
 		timestamp := entry.GetTimestamp().AsTime()
 
-		m, err := unmarshal(data)
+		m, err := UnmarshalLogEntry(data)
 		if err != nil {
 			return nil, fmt.Errorf("could not unmarshal log entry %v: %w", i, err)
 		}
@@ -341,8 +342,8 @@ func logSetPaths(req *gnmipb.SetRequest) {
 	log.Info(sb.String())
 }
 
-// unmarshal attempts to unmarshal the given data into a supported binary log message type.
-func unmarshal(data []byte) (proto.Message, error) {
+// UnmarshalLogEntry attempts to unmarshal the given data into a supported binary log message type.
+func UnmarshalLogEntry(data []byte) (proto.Message, error) {
 	messages := []proto.Message{
 		new(gnmipb.GetRequest),
 		new(gnmipb.GetResponse),
@@ -455,8 +456,8 @@ func Replay(ctx context.Context, r *Recording, clients *Clients) (*Results, erro
 		prevTime = r.events[0].timestamp
 	}
 
-	for _, event := range r.events {
-		log.Infof("Waiting for gRIBI client convergence before next event")
+	for i, event := range r.events {
+		log.Infof("Waiting for gRIBI client convergence before event %d", i)
 		if err := gRIBI.AwaitConverged(ctx); err != nil {
 			return nil, fmt.Errorf("can't converge gRIBI client: %w", err)
 		}

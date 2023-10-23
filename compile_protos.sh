@@ -15,9 +15,14 @@
 # limitations under the License.
 
 # Go
-if ! which protoc-gen-go > /dev/null; then
+which protoc-gen-go > /dev/null
+if [ $? -ne 0 ]; then
   echo Installing protoc-gen-go
   go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+  if [ $? -ne 0 ]; then
+    echo Failed to install protoc-gen-go
+    exit 1
+  fi
 fi
 
 if [ -z $SRCDIR ]; then
@@ -27,8 +32,15 @@ fi
 cd ${SRCDIR}
 
 echo Fetching proto dependencies
+trap "rm -rf proto/build_deps" EXIT
 curl --create-dirs -o proto/build_deps/github.com/grpc/grpc-proto/grpc/binlog/v1/binarylog.proto https://raw.githubusercontent.com/grpc/grpc-proto/master/grpc/binlog/v1/binarylog.proto
+if [ $? -ne 0 ]; then
+  echo Failed to fetch proto dependencies
+  exit 1
+fi
 
 protoc -I=".:./proto/build_deps" --go_out=. --go_opt=paths=source_relative proto/log/log.proto
-
-rm -rf proto/build_deps
+if [ $? -ne 0 ]; then
+  echo Failed to build log proto
+  exit
+fi
