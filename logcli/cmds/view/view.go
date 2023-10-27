@@ -21,7 +21,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/openconfig/replayer"
+	"github.com/openconfig/replayer/internal"
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 
@@ -75,7 +75,7 @@ func parseLog(path string) (*binaryLog, error) {
 		data := entry.GetMessage().GetData()
 		timestamp := entry.GetTimestamp().AsTime()
 
-		m, err := replayer.UnmarshalLogEntry(data)
+		m, err := internal.UnmarshalLogEntry(data)
 		if err != nil {
 			return nil, fmt.Errorf("could not unmarshal log entry %v: %w", i, err)
 		}

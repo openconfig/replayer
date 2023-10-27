@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package replayer
+package internal
 
 import (
 	"context"
@@ -42,7 +42,7 @@ import (
 )
 
 const (
-	testdataPath = "testdata"
+	testdataPath = "../testdata"
 )
 
 func TestParse(t *testing.T) {
@@ -163,11 +163,6 @@ func TestParse(t *testing.T) {
 			wantErr:  errBadUnmarshal,
 		},
 		{
-			desc:     "file not found",
-			filename: "i_dont_exist.pb",
-			wantErr:  os.ErrNotExist,
-		},
-		{
 			desc:     "file not binary log",
 			filename: "parse_non_log.pb",
 			wantErr:  errNoEntries,
@@ -176,7 +171,11 @@ func TestParse(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.desc, func(t *testing.T) {
-			got, err := Parse(path.Join(testdataPath, test.filename))
+			b, err := os.ReadFile(path.Join(testdataPath, test.filename))
+			if err != nil {
+				t.Fatalf("os.ReadFile(%q) failed: %v", test.filename, err)
+			}
+			got, err := ParseBytes(b)
 			au := cmp.AllowUnexported(Recording{}, event{}, snapshot{})
 			if diff := cmp.Diff(test.want, got, protocmp.Transform(), au); diff != "" {
 				t.Errorf("Parse() got unexpected recording (-want +got):\n%s", diff)
@@ -496,44 +495,6 @@ func TestReplayGNMIError(t *testing.T) {
 	_, err := Replay(ctx, rec, newTestClients(ctx, t))
 	if err == nil {
 		t.Errorf("Replay() want error, got nil")
-	}
-}
-
-func TestReplayGRIBIDiff(t *testing.T) {
-	rec := &Recording{
-		snapshot: &snapshot{
-			gribi: &gribipb.GetResponse{
-				Entry: []*gribipb.AFTEntry{
-					entryProto(t, fluent.NextHopEntry().WithNetworkInstance(server.DefaultNetworkInstanceName).WithIndex(1).WithIPAddress("1.2.3.4").EntryProto),
-				},
-			},
-		},
-		events: []*event{
-			{
-				timestamp: time.Unix(0, 0),
-				message: &gribipb.ModifyRequest{
-					Operation: []*gribipb.AFTOperation{
-						opProto(t, gribipb.AFTOperation_ADD, 1, fluent.NextHopEntry().WithNetworkInstance(server.DefaultNetworkInstanceName).WithIndex(2).WithIPAddress("5.6.7.8").OpProto),
-					},
-				},
-			},
-		},
-		finalGRIBI: &gribipb.GetResponse{
-			Entry: []*gribipb.AFTEntry{
-				entryProto(t, fluent.NextHopEntry().WithNetworkInstance(server.DefaultNetworkInstanceName).WithIndex(1).WithIPAddress("1.2.3.4").EntryProto),
-				entryProto(t, fluent.NextHopEntry().WithNetworkInstance(server.DefaultNetworkInstanceName).WithIndex(2).WithIPAddress("5.6.7.8").EntryProto),
-			},
-		},
-	}
-	ctx := context.Background()
-
-	results, err := Replay(ctx, rec, newTestClients(ctx, t))
-	if err != nil {
-		t.Fatalf("Replay() got unexpected error %v", err)
-	}
-
-	if diff := results.GRIBIDiff(rec); diff != "" {
-		t.Errorf("Replay() got unexpected final gRIBI result (-want +got):\n%s", diff)
 	}
 }
 

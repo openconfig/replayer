@@ -17,9 +17,10 @@ package interfaces
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/kylelemons/godebug/pretty"
-	"github.com/openconfig/replayer"
+	"github.com/openconfig/replayer/internal"
 	"github.com/spf13/cobra"
 )
 
@@ -41,7 +42,11 @@ var (
 )
 
 func interfaces(cmd *cobra.Command, args []string) error {
-	r, err := replayer.Parse(logPath)
+	b, err := os.ReadFile(logPath)
+	if err != nil {
+		return err
+	}
+	r, err := internal.ParseBytes(b)
 	if err != nil {
 		return err
 	}
