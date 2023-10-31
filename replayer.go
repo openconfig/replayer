@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package replayer provides methods for parsing and replaying logs of g* protocol messanges.
+// Package replayer provides methods for parsing and replaying logs of g*
+// protocol messanges.
 package replayer
 
 import (
@@ -93,8 +94,8 @@ func Replay(ctx context.Context, t *testing.T, r *Recording, clients *Clients) *
 	return res
 }
 
-// GRIBIDiff returns the diff of the final gRIBI state in the replay results with that of the given
-// recording.
+// GRIBIDiff returns the diff of the final gRIBI state in the replay results
+// with that of the given recording.
 func GRIBIDiff(rec *Recording, res *Results) string {
 	return cmp.Diff(res.FinalGRIBI(), rec.FinalGRIBI(),
 		protocmp.Transform(),

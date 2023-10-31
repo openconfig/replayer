@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package view is a command for viewing the contents of a binary log file in a human-readable format.
+// Package view is a command for viewing the contents of a binary log file in a
+// human-readable format.
 package view
 
 import (
 	"errors"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/openconfig/replayer/internal"
 	"github.com/spf13/cobra"
@@ -29,7 +29,8 @@ import (
 )
 
 var (
-	file string
+	file      string
+	transform bool
 )
 
 // New creates a new view command.
@@ -42,11 +43,23 @@ func New() *cobra.Command {
 	viewCmd.Flags().StringVar(&file, "file", "", "File path of log to be viewed. Files can be stored in CNS or locally.")
 	viewCmd.MarkFlagRequired("file")
 
+	viewCmd.Flags().BoolVar(&transform, "transform", false, "Whether or not to transform the log according to the replayer transformation logic. Transformed logs more accurately represent the events that will get sent by the replayer tool.")
+
 	return viewCmd
 }
 
 func view(cmd *cobra.Command, args []string) error {
-	l, err := parseLog(file)
+	bytes, err := os.ReadFile(file)
+	if err != nil {
+		return err
+	}
+
+	var l []*internal.Event
+	if transform {
+		l, err = parseAndTransformLog(bytes)
+	} else {
+		l, err = parseLog(bytes)
+	}
 	if err != nil {
 		return err
 	}
@@ -54,11 +67,7 @@ func view(cmd *cobra.Command, args []string) error {
 	return runTUI(l)
 }
 
-func parseLog(path string) (*binaryLog, error) {
-	bytes, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
+func parseLog(bytes []byte) ([]*internal.Event, error) {
 	events := new(lpb.Events)
 	if err := proto.Unmarshal(bytes, events); err != nil {
 		return nil, err
@@ -69,7 +78,7 @@ func parseLog(path string) (*binaryLog, error) {
 		return nil, errors.New("no log entries found")
 	}
 
-	l := &binaryLog{}
+	var l []*internal.Event
 
 	for i, entry := range entries {
 		data := entry.GetMessage().GetData()
@@ -80,20 +89,48 @@ func parseLog(path string) (*binaryLog, error) {
 			return nil, fmt.Errorf("could not unmarshal log entry %v: %w", i, err)
 		}
 
-		l.entries = append(l.entries, &logEntry{
-			t: timestamp,
-			m: m,
+		l = append(l, &internal.Event{
+			Timestamp: timestamp,
+			Message:   m,
 		})
 
 	}
 	return l, nil
 }
 
-type binaryLog struct {
-	entries []*logEntry
-}
+func parseAndTransformLog(bytes []byte) ([]*internal.Event, error) {
+	r, err := internal.ParseBytes(bytes)
+	if err != nil {
+		return nil, err
+	}
+	intfs, err := r.Interfaces()
+	if err != nil {
+		return nil, err
+	}
 
-type logEntry struct {
-	t time.Time
-	m proto.Message
+	// Map gRIBI interfaces to placeholder values so they appear in the transformed log.
+	portNum := 0
+	newPlaceholderPort := func() string {
+		portNum++
+		return fmt.Sprintf("[Port %d]", portNum)
+	}
+
+	intfMap := map[string]string{}
+	for bundle, members := range intfs {
+		if len(members) == 0 {
+			// The "bundle" is not a bundle, so replace directly.
+			intfMap[bundle] = newPlaceholderPort()
+		} else {
+			// The "bundle" is a bundle, so replace all members of the bundle.
+			for _, member := range members {
+				intfMap[member.Name] = newPlaceholderPort()
+			}
+		}
+	}
+
+	if err := r.SetInterfaceMap(intfMap); err != nil {
+		return nil, err
+	}
+
+	return internal.GenerateReplayEvents(r)
 }

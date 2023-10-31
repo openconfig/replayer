@@ -96,25 +96,25 @@ func TestParse(t *testing.T) {
 						},
 					},
 				},
-				events: []*event{
+				events: []*Event{
 					{
-						message: &gribipb.ModifyRequest{
+						Message: &gribipb.ModifyRequest{
 							Operation: []*gribipb.AFTOperation{
 								opProto(t, gribipb.AFTOperation_ADD, 0, fluent.IPv4Entry().WithNetworkInstance("DEFAULT").WithNextHopGroup(43).WithPrefix("prefix2").OpProto),
 							},
 						},
-						timestamp: time.Unix(5, 0),
+						Timestamp: time.Unix(5, 0),
 					},
 					{
-						message: &gribipb.ModifyRequest{
+						Message: &gribipb.ModifyRequest{
 							Operation: []*gribipb.AFTOperation{
 								opProto(t, gribipb.AFTOperation_ADD, 1, fluent.IPv4Entry().WithNetworkInstance("DEFAULT").WithNextHopGroup(44).WithPrefix("prefix3").OpProto),
 							},
 						},
-						timestamp: time.Unix(6, 0),
+						Timestamp: time.Unix(6, 0),
 					},
 					{
-						message: &gnmipb.SetRequest{
+						Message: &gnmipb.SetRequest{
 							Prefix: &gnmipb.Path{
 								Origin: "foo",
 								Target: "bar",
@@ -128,17 +128,17 @@ func TestParse(t *testing.T) {
 								},
 							},
 						},
-						timestamp: time.Unix(7, 0),
+						Timestamp: time.Unix(7, 0),
 					},
 					{
-						message: &p4pb.WriteRequest{
+						Message: &p4pb.WriteRequest{
 							DeviceId: 1234,
 							Role:     "test_role",
 						},
-						timestamp: time.Unix(9, 0),
+						Timestamp: time.Unix(9, 0),
 					},
 					{
-						message: &p4pb.PacketOut{
+						Message: &p4pb.PacketOut{
 							Payload: []byte("test payload"),
 							Metadata: []*p4pb.PacketMetadata{
 								{
@@ -147,7 +147,7 @@ func TestParse(t *testing.T) {
 								},
 							},
 						},
-						timestamp: time.Unix(10, 0),
+						Timestamp: time.Unix(10, 0),
 					},
 				},
 				finalGRIBI: &gribipb.GetResponse{
@@ -176,7 +176,7 @@ func TestParse(t *testing.T) {
 				t.Fatalf("os.ReadFile(%q) failed: %v", test.filename, err)
 			}
 			got, err := ParseBytes(b)
-			au := cmp.AllowUnexported(Recording{}, event{}, snapshot{})
+			au := cmp.AllowUnexported(Recording{}, snapshot{})
 			if diff := cmp.Diff(test.want, got, protocmp.Transform(), au); diff != "" {
 				t.Errorf("Parse() got unexpected recording (-want +got):\n%s", diff)
 			}
@@ -233,9 +233,9 @@ func TestReplayiGRIBI(t *testing.T) {
 						},
 					},
 				},
-				events: []*event{
-					&event{
-						message: &gribipb.ModifyRequest{
+				events: []*Event{
+					{
+						Message: &gribipb.ModifyRequest{
 							Operation: []*gribipb.AFTOperation{
 								opProto(t, gribipb.AFTOperation_ADD, 1, fluent.NextHopGroupEntry().WithNetworkInstance(server.DefaultNetworkInstanceName).WithID(42).AddNextHop(1, 1).OpProto),
 								opProto(t, gribipb.AFTOperation_ADD, 2, fluent.IPv4Entry().WithNetworkInstance(server.DefaultNetworkInstanceName).WithNextHopGroup(42).WithPrefix("1.1.1.1/32").OpProto),
@@ -369,9 +369,9 @@ func TestReplayGRIBIErrors(t *testing.T) {
 						},
 					},
 				},
-				events: []*event{
-					&event{
-						message: &gribipb.ModifyRequest{
+				events: []*Event{
+					{
+						Message: &gribipb.ModifyRequest{
 							Operation: []*gribipb.AFTOperation{
 								opProto(t, gribipb.AFTOperation_INVALID, 1234, fluent.NextHopEntry().OpProto),
 							},
@@ -437,9 +437,9 @@ func TestReplayGNMI(t *testing.T) {
 						},
 					},
 				},
-				events: []*event{
+				events: []*Event{
 					{
-						message: &gnmipb.SetRequest{
+						Message: &gnmipb.SetRequest{
 							Update: []*gnmipb.Update{
 								&gnmipb.Update{
 									Path: &gnmipb.Path{
@@ -451,7 +451,7 @@ func TestReplayGNMI(t *testing.T) {
 						},
 					},
 					{
-						message: &gnmipb.SetRequest{
+						Message: &gnmipb.SetRequest{
 							Update: []*gnmipb.Update{
 								&gnmipb.Update{
 									Path: &gnmipb.Path{
@@ -489,7 +489,7 @@ func TestReplayGNMIError(t *testing.T) {
 
 	rec := &Recording{
 		snapshot: &snapshot{},
-		events:   []*event{&event{message: &gnmipb.SetRequest{Prefix: &gnmipb.Path{Origin: "error"}}}},
+		events:   []*Event{{Message: &gnmipb.SetRequest{Prefix: &gnmipb.Path{Origin: "error"}}}},
 	}
 
 	_, err := Replay(ctx, rec, newTestClients(ctx, t))
@@ -576,7 +576,7 @@ func TestSetInterfaceMap(t *testing.T) {
 			if err != nil {
 				return
 			}
-			au := cmp.AllowUnexported(Recording{}, event{}, snapshot{})
+			au := cmp.AllowUnexported(Recording{}, snapshot{})
 			if diff := cmp.Diff(test.wantIntfs, test.recording.intfMap, au, protocmp.Transform()); diff != "" {
 				t.Errorf("SetInterfaceMap() got unexpected recording (-want +got):\n%s", diff)
 			}

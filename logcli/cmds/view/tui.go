@@ -24,13 +24,14 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/kylelemons/godebug/pretty"
+	"github.com/openconfig/replayer/internal"
 	"github.com/rivo/tview"
 	"google.golang.org/protobuf/proto"
 
 	gnmipb "github.com/openconfig/gnmi/proto/gnmi"
 )
 
-func runTUI(l *binaryLog) error {
+func runTUI(l []*internal.Event) error {
 	// Define widgets
 	t := &tui{
 		l:        l,
@@ -64,7 +65,7 @@ func runTUI(l *binaryLog) error {
 }
 
 type tui struct {
-	l *binaryLog
+	l []*internal.Event
 
 	nextMatchStartIndex int
 
@@ -96,10 +97,10 @@ func (t *tui) setupTable() {
 	t.table.SetCell(0, 2, headerCell("Message Type"))
 	t.table.SetFixed(1, 0)
 
-	for i, entry := range t.l.entries {
+	for i, entry := range t.l {
 		t.table.SetCellSimple(i+1, 0, strconv.Itoa(i))
-		t.table.SetCellSimple(i+1, 1, entry.t.String())
-		t.table.SetCellSimple(i+1, 2, fmt.Sprintf("%T", entry.m))
+		t.table.SetCellSimple(i+1, 1, entry.Timestamp.String())
+		t.table.SetCellSimple(i+1, 2, fmt.Sprintf("%T", entry.Message))
 	}
 
 	selectCell := func(r int, _ int) {
@@ -107,12 +108,12 @@ func (t *tui) setupTable() {
 			return
 		}
 		t.nextMatchStartIndex = 0
-		entry := t.l.entries[r-1]
-		t.msgView.SetTitle(fmt.Sprintf("Entry %d  %v  %v", r-1, entry.t, fmt.Sprintf("%T", entry.m)))
+		entry := t.l[r-1]
+		t.msgView.SetTitle(fmt.Sprintf("Entry %d  %v  %v", r-1, entry.Timestamp, fmt.Sprintf("%T", entry.Message)))
 		t.msgView.SetText("Loading...")
 		t.app.SetFocus(t.msgView)
 		go t.app.QueueUpdateDraw(func() {
-			t.msgView.SetText(prettySprintMessage(entry.m)).ScrollToBeginning()
+			t.msgView.SetText(prettySprintMessage(entry.Message)).ScrollToBeginning()
 		})
 	}
 
@@ -205,11 +206,11 @@ func (t *tui) setupSearch() {
 func (t *tui) executeSearch() {
 	match := make(chan int)
 	wg := sync.WaitGroup{}
-	for i, entry := range t.l.entries {
+	for i, entry := range t.l {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			txt := prettySprintMessage(entry.m)
+			txt := prettySprintMessage(entry.Message)
 			if strings.Contains(txt, t.search.GetText()) {
 				match <- i
 			}

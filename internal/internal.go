@@ -43,15 +43,15 @@ import (
 // Recording is a parsed binary log.
 type Recording struct {
 	snapshot   *snapshot
-	events     []*event
+	events     []*Event
 	intfMap    map[string]string
 	finalGRIBI *gribipb.GetResponse
 }
 
-func (r *Recording) gribiEvents() []*event {
-	var ret []*event
+func (r *Recording) gribiEvents() []*Event {
+	var ret []*Event
 	for _, event := range r.events {
-		switch event.message.(type) {
+		switch event.Message.(type) {
 		case *gribipb.ModifyRequest:
 			ret = append(ret, event)
 		}
@@ -71,9 +71,9 @@ func (r *Recording) String() string {
 	return fmt.Sprintf("%+v", strRep)
 }
 
-// SetInterfaceMap sets the interfaces to be used during replay according to the input map.
-// When replaying, any un-mapped interfaces and bundles containing unmapped interfaces will be
-// ignored.
+// SetInterfaceMap sets the interfaces to be used during replay according to the
+// input map. When replaying, any un-mapped interfaces and bundles containing
+// unmapped interfaces will be ignored.
 func (r *Recording) SetInterfaceMap(oldToNew map[string]string) error {
 	bundleMapping, err := r.Interfaces()
 	if err != nil {
@@ -97,9 +97,10 @@ var (
 	errNoSnapshot = errors.New("no snapshot found")
 )
 
-// Interfaces returns a map where the keys are interface names found in the gRIBI events and
-// the values are the members of the bundle interface specified in the gNMI snapshot.
-// If the key is not a bundle interface, the length of the slice will be zero.
+// Interfaces returns a map where the keys are interface names found in the
+// gRIBI events and the values are the members of the bundle interface specified
+// in the gNMI snapshot.  If the key is not a bundle interface, the length of
+// the slice will be zero.
 func (r *Recording) Interfaces() (map[string][]Interface, error) {
 	// Get interface references from the gRIBI snapshot.
 	gribiIntfs := map[string][]Interface{}
@@ -117,7 +118,7 @@ func (r *Recording) Interfaces() (map[string][]Interface, error) {
 		}
 	}
 	for _, event := range r.gribiEvents() {
-		req := event.message.(*gribipb.ModifyRequest)
+		req := event.Message.(*gribipb.ModifyRequest)
 		for _, aftOp := range req.GetOperation() {
 			switch v := aftOp.GetEntry().(type) {
 			case *gribipb.AFTOperation_NextHop:
@@ -190,8 +191,8 @@ func (r *Recording) Interfaces() (map[string][]Interface, error) {
 	return gribiIntfs, nil
 }
 
-// FinalGRIBI returns the final gRIBI GetResponse in the recorded log, representing the recorded
-// final gRIBI state of the device.
+// FinalGRIBI returns the final gRIBI GetResponse in the recorded log,
+// representing the recorded final gRIBI state of the device.
 func (r *Recording) FinalGRIBI() *gribipb.GetResponse {
 	if r == nil {
 		return nil
@@ -218,14 +219,14 @@ func (s *snapshot) String() string {
 	return fmt.Sprintf("%+v", strRep)
 }
 
-// event is one logged event from a binarylog.
-type event struct {
-	timestamp time.Time
-	message   proto.Message
+// Event is one logged event from a binarylog.
+type Event struct {
+	Timestamp time.Time
+	Message   proto.Message
 }
 
-func (e *event) String() string {
-	return fmt.Sprintf("[%v: %v]", e.timestamp, prototext.Format(e.message))
+func (e *Event) String() string {
+	return fmt.Sprintf("[%v: %v]", e.Timestamp, prototext.Format(e.Message))
 }
 
 var (
@@ -271,10 +272,10 @@ func ParseBytes(bytes []byte) (*Recording, error) {
 			if r.snapshot.gnmiSet == nil {
 				r.snapshot.gnmiSet = v
 			} else {
-				r.events = append(r.events, &event{message: v, timestamp: timestamp})
+				r.events = append(r.events, &Event{Message: v, Timestamp: timestamp})
 			}
 		case *gribipb.ModifyRequest, *p4pb.PacketOut, *p4pb.WriteRequest:
-			r.events = append(r.events, &event{message: v, timestamp: timestamp})
+			r.events = append(r.events, &Event{Message: v, Timestamp: timestamp})
 		default:
 			log.Errorf("Unsupported message type: %T, %v", v, v)
 		}
@@ -321,7 +322,8 @@ func logSetPaths(req *gnmipb.SetRequest) {
 	log.Info(sb.String())
 }
 
-// UnmarshalLogEntry attempts to unmarshal the given data into a supported binary log message type.
+// UnmarshalLogEntry attempts to unmarshal the given data into a supported
+// binary log message type.
 func UnmarshalLogEntry(data []byte) (proto.Message, error) {
 	messages := []proto.Message{
 		new(gnmipb.GetRequest),
@@ -363,11 +365,11 @@ func unmarshalToType(data []byte, m proto.Message) error {
 	return nil
 }
 
-// generateReplayEvents generates the list of events that will be replayed in order. This will
-// generate initial events from the recorded snapshots and generate later events by transforming the
-// parsed events into ready-to-send events.
-func generateReplayEvents(r *Recording) ([]*event, error) {
-	var events []*event
+// GenerateReplayEvents generates the list of events to be replayed in order.
+// This will generate initial events from the recorded snapshots and generate
+// later events by transforming the parsed events into ready-to-send events.
+func GenerateReplayEvents(r *Recording) ([]*Event, error) {
+	var events []*Event
 
 	// Generate snapshot events.
 	// NOTE: snapshots will have timestamp 0 to distinguish them as snapshots
@@ -376,7 +378,7 @@ func generateReplayEvents(r *Recording) ([]*event, error) {
 		if err != nil {
 			return nil, fmt.Errorf("can't transform initial set request: %w", err)
 		}
-		events = append(events, &event{message: setReq})
+		events = append(events, &Event{Message: setReq})
 	}
 
 	var opID uint64
@@ -386,23 +388,23 @@ func generateReplayEvents(r *Recording) ([]*event, error) {
 			return nil, fmt.Errorf("can't transform initial modify request: %w", err)
 		}
 		opID += uint64(len(initModReq.GetOperation())) + 1
-		events = append(events, &event{message: initModReq})
+		events = append(events, &Event{Message: initModReq})
 	}
 
 	// Now transform the parsed events
 	for _, e := range r.events {
-		var newEvent *event
-		switch req := e.message.(type) {
+		var newEvent *Event
+		switch req := e.Message.(type) {
 		case *gribipb.ModifyRequest:
-			newEvent = generateModifyRequestEvent(req, e.timestamp, &opID)
+			newEvent = generateModifyRequestEvent(req, e.Timestamp, &opID)
 		case *gnmipb.SetRequest:
 			setReq, err := transformSet(req, r)
 			if err != nil {
 				return nil, fmt.Errorf("can't transform set request: %w", err)
 			}
-			newEvent = &event{
-				timestamp: e.timestamp,
-				message:   setReq,
+			newEvent = &Event{
+				Timestamp: e.Timestamp,
+				Message:   setReq,
 			}
 		default:
 			// Unspecified events are considered to need no transformation.
@@ -417,7 +419,7 @@ func generateReplayEvents(r *Recording) ([]*event, error) {
 	return events, nil
 }
 
-func generateModifyRequestEvent(req *gribipb.ModifyRequest, ts time.Time, opID *uint64) *event {
+func generateModifyRequestEvent(req *gribipb.ModifyRequest, ts time.Time, opID *uint64) *Event {
 	if req.GetParams() != nil || req.GetElectionId() != nil {
 		log.Infof("Skipping gRIBI session params or election ID request: %v", req)
 		return nil
@@ -428,9 +430,9 @@ func generateModifyRequestEvent(req *gribipb.ModifyRequest, ts time.Time, opID *
 		*opID++
 	}
 
-	return &event{
-		timestamp: ts,
-		message:   req,
+	return &Event{
+		Timestamp: ts,
+		Message:   req,
 	}
 }
 
@@ -472,7 +474,7 @@ func Replay(ctx context.Context, r *Recording, clients *Clients) (*Results, erro
 	gRIBI.StartSending()
 	defer gRIBI.StopSending()
 
-	events, err := generateReplayEvents(r)
+	events, err := GenerateReplayEvents(r)
 	if err != nil {
 		return nil, fmt.Errorf("failed to transform recording: %w", err)
 	}
@@ -492,14 +494,14 @@ func Replay(ctx context.Context, r *Recording, clients *Clients) (*Results, erro
 		if err := gRIBI.AwaitConverged(ctx); err != nil {
 			return nil, fmt.Errorf("can't converge gRIBI client: %w", err)
 		}
-		waitDuration := e.timestamp.Sub(prevTime)
+		waitDuration := e.Timestamp.Sub(prevTime)
 		if !prevTime.IsZero() && waitDuration > 0 {
 			log.Infof("Sleeping for %v", waitDuration)
 			time.Sleep(waitDuration)
 		}
-		prevTime = e.timestamp
+		prevTime = e.Timestamp
 
-		switch req := e.message.(type) {
+		switch req := e.Message.(type) {
 		case *gribipb.ModifyRequest:
 			log.Infof("Sending gRIBI modify request: %v", req)
 			gRIBI.Q(req)
@@ -578,7 +580,7 @@ func logGRIBIResults(rec *Recording, res *Results) {
 		summary[aftOp.GetId()] = &sVal{op: aftOp}
 	}
 	for _, e := range rec.gribiEvents() {
-		req := e.message.(*gribipb.ModifyRequest)
+		req := e.Message.(*gribipb.ModifyRequest)
 		for _, aftOp := range req.GetOperation() {
 			summary[aftOp.GetId()] = &sVal{op: aftOp}
 		}
@@ -655,7 +657,8 @@ func (r *Results) GNMI() []*gnmipb.SetResponse {
 	return r.gnmi
 }
 
-// FinalGRIBI returns the gRIBI GetResponse representing the gRIBI state on the device after replay.
+// FinalGRIBI returns the gRIBI GetResponse representing the gRIBI state on the
+// device after replay.
 func (r *Results) FinalGRIBI() *gribipb.GetResponse {
 	if r == nil {
 		return nil

@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package merge is a command for merging binary logs into a single log, ordered chronologically.
+// Package merge is a command for merging binary logs into a single log, ordered
+// chronologically.
 package merge
 
 import (

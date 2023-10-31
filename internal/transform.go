@@ -68,6 +68,12 @@ func transformUpdate(update *gnmipb.Update, r *Recording) (*updates, error) {
 	if update.GetPath() == nil {
 		return nil, nil
 	}
+
+	if update.GetPath().GetOrigin() == "cli" {
+		// We cannot transform vendor config, so we ignore it.
+		return nil, nil
+	}
+
 	strpath, err := ygot.PathToString(update.GetPath())
 	if err != nil {
 		return nil, fmt.Errorf("PathToString(%v): %w", update.GetPath(), err)
@@ -107,7 +113,8 @@ func transformUpdate(update *gnmipb.Update, r *Recording) (*updates, error) {
 		"/components",
 		"/network-instances/network-instance[name=mgmtVrf]/interfaces/interface[id=Management1]",
 		"/system/config/hostname",
-		"/system/logging":
+		"/system/logging",
+		"/system/ntp":
 		return nil, nil
 	}
 
