@@ -17,6 +17,7 @@ package internal
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	log "github.com/golang/glog"
@@ -109,11 +110,14 @@ func transformUpdate(update *gnmipb.Update, r *Recording) (*updates, error) {
 		"/network-instances/network-instance[name=mgmtVrf]",
 		"/network-instances/network-instance[name=default]":
 		return transformNetworkInstance(update)
+	case "/routing-policy":
+		return transformCommunityMembers(update)
 	case
 		"/components",
 		"/network-instances/network-instance[name=mgmtVrf]/interfaces/interface[id=Management1]",
 		"/system/config/hostname",
 		"/system/logging",
+		"/sampling",
 		"/system/ntp":
 		return nil, nil
 	}
@@ -122,13 +126,67 @@ func transformUpdate(update *gnmipb.Update, r *Recording) (*updates, error) {
 	return &updates{update: []*gnmipb.Update{update}}, nil
 }
 
+func transformCommunityMembers(update *gnmipb.Update) (*updates, error) {
+	jo, err := unmarshalJSONFromUpdate(update)
+	if err != nil {
+		return nil, err
+	}
+	t, err := jo.objectAtPathString("defined-sets/bgp-defined-sets/community-sets")
+	if err != nil || t == nil {
+		return nil, err
+	}
+	cs, err := t.objectListField("community-set")
+	if err != nil || cs == nil {
+		return nil, err
+	}
+	for _, c := range cs {
+		cfg, err := c.objectField("config")
+		if err != nil {
+			return nil, err
+		}
+		cm, err := cfg.stringListField("community-member")
+		if err != nil {
+			return nil, err
+		}
+		if cm == nil {
+			return &updates{update: []*gnmipb.Update{update}}, nil
+		}
+		var newCM []uint32
+		for _, s := range cm {
+			parts := strings.Split(s, ":")
+			if len(parts) != 2 {
+				return nil, fmt.Errorf("community-member: %s is invalid", s)
+			}
+			top, err := strconv.Atoi(parts[0])
+			if err != nil {
+				return nil, err
+			}
+			bot, err := strconv.Atoi(parts[1])
+			if err != nil {
+				return nil, err
+			}
+			newCM = append(newCM, asU32(uint16(top), uint16(bot)))
+		}
+		cfg["community-member"] = newCM
+	}
+
+	if err := marshalJSONToUpdate(update, jo); err != nil {
+		return nil, err
+	}
+	return &updates{update: []*gnmipb.Update{update}}, nil
+}
+
+func asU32(top, bottom uint16) uint32 {
+	return (uint32(top) << 16) | uint32(bottom)
+}
+
 func transformNetworkInstances(update *gnmipb.Update) (*updates, error) {
 	ups := &updates{update: []*gnmipb.Update{update}}
 	nis, err := unmarshalJSONFromUpdate(update)
 	if err != nil {
 		return nil, err
 	}
-	niList, err := nis.objectListField("openconfig-network-instance:network-instance")
+	niList, err := nis.objectListField("network-instance")
 	if niList == nil || err != nil {
 		return nil, err
 	}
@@ -203,15 +261,9 @@ func networkInstanceHelper(name string, ni jsonObj, ups *updates) error {
 }
 
 func splitProtocols(ni jsonObj) ([]*gnmipb.Update, error) {
-	protocols, err := ni.objectField("openconfig-network-instance:protocols")
+	protocols, err := ni.objectField("protocols")
 	if err != nil {
 		return nil, err
-	}
-	if protocols == nil {
-		protocols, err = ni.objectField("protocols")
-		if protocols == nil || err != nil {
-			return nil, err
-		}
 	}
 	protocolList, err := protocols.objectListField("protocol")
 	if err != nil {
@@ -247,15 +299,9 @@ func splitProtocols(ni jsonObj) ([]*gnmipb.Update, error) {
 }
 
 func transformProtocols(ni jsonObj) error {
-	protocols, err := ni.objectField("openconfig-network-instance:protocols")
+	protocols, err := ni.objectField("protocols")
 	if err != nil {
 		return err
-	}
-	if protocols == nil {
-		protocols, err = ni.objectField("protocols")
-		if protocols == nil || err != nil {
-			return err
-		}
 	}
 	protocolList, err := protocols.objectListField("protocol")
 	if err != nil {
@@ -433,31 +479,17 @@ func transformISIS(isis jsonObj) error {
 // to ensure that interfaces that must remain untouched do not have their behavior modified.
 // It modifies the update in-place and leaves it unmodified if there are no unwanted paths.
 func filterPolicyForwardingInterfaces(ni jsonObj) error {
-	pf, err := ni.objectField("openconfig-network-instance:policy-forwarding")
-	if pf == nil || err != nil {
-		return err
-	}
-	intfs, err := pf.objectField("interfaces")
+	intfs, err := ni.objectAtPathString("policy-forwarding/interfaces")
 	if intfs == nil || err != nil {
 		return err
 	}
-	intfList, err := intfs.objectListField("interface")
-	if err != nil {
-		return err
-	}
-
-	var newIntfList []jsonObj
-	for _, intf := range intfList {
+	return intfs.filterObjectList("interface", func(intf jsonObj) bool {
 		id, err := intf.stringField("interface-id")
 		if err != nil {
-			return err
+			return false
 		}
-		if !isProtectedBundle(id) {
-			newIntfList = append(newIntfList, intf)
-		}
-	}
-	intfs["interface"] = newIntfList
-	return nil
+		return !isProtectedBundle(id)
+	})
 }
 
 // filterLACP removes the LACP config for all bundles other than the bundles whose members have been
@@ -468,25 +500,20 @@ func filterLACP(update *gnmipb.Update) error {
 	if err != nil {
 		return err
 	}
-	intfs, err := lacp.objectField("openconfig-lacp:interfaces")
+	intfs, err := lacp.objectField("interfaces")
 	if intfs == nil || err != nil {
 		return err
 	}
-	intfList, err := intfs.objectListField("interface")
+	err = intfs.filterObjectList("interface", func(intf jsonObj) bool {
+		name, err := intf.stringField("name")
+		if err != nil {
+			return false
+		}
+		return !isProtectedBundle(name)
+	})
 	if err != nil {
 		return err
 	}
-	var newIntfList []jsonObj
-	for _, intf := range intfList {
-		name, err := intf.stringField("name")
-		if err != nil {
-			return err
-		}
-		if !isProtectedBundle(name) {
-			newIntfList = append(newIntfList, intf)
-		}
-	}
-	intfs["interface"] = newIntfList
 	return marshalJSONToUpdate(update, lacp)
 }
 
@@ -499,22 +526,12 @@ func remapInterfaces(update *gnmipb.Update, intfMap map[string]string) ([]*gnmip
 	if err != nil {
 		return nil, err
 	}
-	intfList, err := intfs.objectListField("openconfig-interfaces:interface")
-	if err != nil {
-		return nil, err
-	}
-	if intfList == nil {
-		intfList, err = intfs.objectListField("interface")
-		if err != nil {
-			return nil, err
-		}
-	}
 
-	var updates []*gnmipb.Update
-	for _, intf := range intfList {
+	// Keep only interfaces we care about and rename them as necessary.
+	err = intfs.filterObjectList("interface", func(intf jsonObj) bool {
 		name, err := intf.stringField("name")
 		if err != nil {
-			return nil, err
+			return false
 		}
 
 		newName, ok := intfMap[name]
@@ -522,43 +539,52 @@ func remapInterfaces(update *gnmipb.Update, intfMap map[string]string) ([]*gnmip
 			intf["name"] = newName
 			cfg, err := intf.objectField("config")
 			if err != nil {
-				return nil, err
+				return false
 			}
 			cfg["name"] = newName
-			u, err := interfaceUpdate(newName, intf)
-			if err != nil {
-				return nil, err
-			}
-			if u != nil {
-				updates = append(updates, u)
-			}
+			return true
 		} else if strings.HasPrefix(name, "Port-Channel") && !isProtectedBundle(name) {
 			// TODO(nhawke): Support other vendor bundle names.
-			u, err := interfaceUpdate(name, intf)
-			if err != nil {
-				return nil, err
-			}
-			if u != nil {
-				updates = append(updates, u)
-			}
+			return true
 		}
+		return false
+	})
+	if err != nil {
+		return nil, err
 	}
-	return updates, nil
-}
 
-func interfaceUpdate(name string, val jsonObj) (*gnmipb.Update, error) {
-	update := &gnmipb.Update{
-		Path: &gnmipb.Path{
+	intfList, err := intfs.objectListField("interface")
+	if err != nil {
+		return nil, err
+	}
+
+	// Split interfaces into separate updates.
+	var updates []*gnmipb.Update
+	for _, intf := range intfList {
+		name, err := intf.stringField("name")
+		if err != nil {
+			return nil, err
+		}
+
+		path := &gnmipb.Path{
 			Elem: []*gnmipb.PathElem{{
 				Name: "interfaces",
 			}, {
 				Name: "interface",
 				Key:  map[string]string{"name": name},
 			}},
-		},
+		}
+
+		update := &gnmipb.Update{
+			Path: path,
+		}
+		if err := marshalJSONToUpdate(update, intf); err != nil {
+			return nil, err
+		}
+		updates = append(updates, update)
 	}
-	err := marshalJSONToUpdate(update, val)
-	return update, err
+
+	return updates, nil
 }
 
 // isProtectedBundle returns whether a given bundle is protected. Protected bundles should not have

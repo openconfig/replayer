@@ -26,6 +26,7 @@ import (
 
 	"golang.org/x/exp/slices"
 
+	"github.com/cisco-open/go-p4/p4rt_client"
 	log "github.com/golang/glog"
 	"github.com/kylelemons/godebug/pretty"
 	"github.com/openconfig/gribigo/client"
@@ -37,6 +38,7 @@ import (
 	gnmipb "github.com/openconfig/gnmi/proto/gnmi"
 	gribipb "github.com/openconfig/gribi/v1/proto/service"
 	lpb "github.com/openconfig/replayer/proto/log"
+	p4infopb "github.com/p4lang/p4runtime/go/p4/config/v1"
 	p4pb "github.com/p4lang/p4runtime/go/p4/v1"
 )
 
@@ -204,6 +206,7 @@ type snapshot struct {
 	gribi   *gribipb.GetResponse
 	gnmiGet *gnmipb.GetResponse
 	gnmiSet *gnmipb.SetRequest
+	p4rt    *p4pb.ReadResponse
 }
 
 func (s *snapshot) String() string {
@@ -211,11 +214,14 @@ func (s *snapshot) String() string {
 		GRIBI   string
 		GNMI    string
 		GNMISet string
+		P4RT    string
 	}{
 		GRIBI:   prototext.Format(s.gribi),
 		GNMI:    prototext.Format(s.gnmiGet),
 		GNMISet: prototext.Format(s.gnmiSet),
+		P4RT:    prototext.Format(s.p4rt),
 	}
+
 	return fmt.Sprintf("%+v", strRep)
 }
 
@@ -273,6 +279,10 @@ func ParseBytes(bytes []byte) (*Recording, error) {
 				r.snapshot.gnmiSet = v
 			} else {
 				r.events = append(r.events, &Event{Message: v, Timestamp: timestamp})
+			}
+		case *p4pb.ReadResponse:
+			if r.snapshot.p4rt == nil {
+				r.snapshot.p4rt = v
 			}
 		case *gribipb.ModifyRequest, *p4pb.PacketOut, *p4pb.WriteRequest:
 			r.events = append(r.events, &Event{Message: v, Timestamp: timestamp})
@@ -334,8 +344,10 @@ func UnmarshalLogEntry(data []byte) (proto.Message, error) {
 		new(gnmipb.SubscribeResponse),
 		new(gribipb.GetResponse),
 		new(gribipb.ModifyRequest),
-		new(p4pb.PacketOut),
 		new(p4pb.WriteRequest),
+		new(p4pb.ReadResponse),
+		// Try to parse this last because it consists of arbitrary bytes, which can false-positive match many message types.
+		new(p4pb.PacketOut),
 	}
 
 	for _, m := range messages {
@@ -391,6 +403,14 @@ func GenerateReplayEvents(r *Recording) ([]*Event, error) {
 		events = append(events, &Event{Message: initModReq})
 	}
 
+	if r.snapshot.p4rt != nil {
+		initialWriteReq, err := initialP4RTWriteReq(r.snapshot.p4rt)
+		if err != nil {
+			return nil, fmt.Errorf("can't transform initial p4rt write request: %w", err)
+		}
+		events = append(events, &Event{Message: initialWriteReq})
+	}
+
 	// Now transform the parsed events
 	for _, e := range r.events {
 		var newEvent *Event
@@ -406,6 +426,10 @@ func GenerateReplayEvents(r *Recording) ([]*Event, error) {
 				Timestamp: e.Timestamp,
 				Message:   setReq,
 			}
+		case *p4pb.WriteRequest:
+			req.DeviceId = 1
+			req.ElectionId = &p4pb.Uint128{Low: p4rtElectionID}
+			newEvent = e
 		default:
 			// Unspecified events are considered to need no transformation.
 			newEvent = e
@@ -445,18 +469,20 @@ var (
 	}
 )
 
-// Clients holds the RPC clients for g* protocols.
-type Clients struct {
-	GNMI  gnmipb.GNMIClient
-	GRIBI gribipb.GRIBIClient
+// Config holds configuration for the replay, including RPC clients for g* protocols.
+type Config struct {
+	GNMI   gnmipb.GNMIClient
+	GRIBI  gribipb.GRIBIClient
+	P4RT   p4pb.P4RuntimeClient
+	P4Info *p4infopb.P4Info
 }
 
-func newgRIBIClient(ctx context.Context, clients *Clients) (*client.Client, error) {
+func newGRIBIClient(ctx context.Context, gClient gribipb.GRIBIClient) (*client.Client, error) {
 	c, err := client.New(gRIBIClientOpts...)
 	if err != nil {
 		return nil, err
 	}
-	if err := c.UseStub(clients.GRIBI); err != nil {
+	if err := c.UseStub(gClient); err != nil {
 		return nil, fmt.Errorf("cannot use gRIBI stub: %w", err)
 	}
 	if err := c.Connect(ctx); err != nil {
@@ -465,14 +491,22 @@ func newgRIBIClient(ctx context.Context, clients *Clients) (*client.Client, erro
 	return c, nil
 }
 
-// Replay sends the parsed record over the given gRIBI client.
-func Replay(ctx context.Context, r *Recording, clients *Clients) (*Results, error) {
-	gRIBI, err := newgRIBIClient(ctx, clients)
+// Replay sends the parsed recording over the given clients.
+func Replay(ctx context.Context, r *Recording, config *Config) (*Results, error) {
+	if config == nil {
+		config = &Config{}
+	}
+	gRIBI, err := newGRIBIClient(ctx, config.GRIBI)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create new gRIBI client: %w", err)
 	}
 	gRIBI.StartSending()
 	defer gRIBI.StopSending()
+
+	p4Client, err := setupP4RTClient(config.P4RT, config.P4Info)
+	if err != nil {
+		return nil, err
+	}
 
 	events, err := GenerateReplayEvents(r)
 	if err != nil {
@@ -509,12 +543,27 @@ func Replay(ctx context.Context, r *Recording, clients *Clients) (*Results, erro
 		case *gnmipb.SetRequest:
 			logSetPaths(req)
 			longInfof("Sending gNMI set request: %v", prettySetRequest(req))
-			resp, err := clients.GNMI.Set(ctx, req)
+			resp, err := config.GNMI.Set(ctx, req)
 			if err != nil {
 				log.Errorf("Response from gNMI error: %v", resp)
 				return nil, fmt.Errorf("gNMI set error: %w", err)
 			}
 			results.gnmi = append(results.gnmi, resp)
+		case *p4pb.PacketOut:
+			p4req := &p4pb.StreamMessageRequest{
+				Update: &p4pb.StreamMessageRequest_Packet{
+					Packet: req,
+				},
+			}
+			log.Infof("Sending p4rt packet out: %v", req)
+			if err := p4Client.StreamChannelSendMsg(&p4rtStreamName, p4req); err != nil {
+				return nil, fmt.Errorf("p4rt packetIO error: %w", err)
+			}
+		case *p4pb.WriteRequest:
+			longInfof("Sending p4rt write request: %v", req)
+			if err := p4Client.Write(req); err != nil {
+				return nil, fmt.Errorf("p4rt write error: %w", err)
+			}
 		default:
 			log.Errorf("Unsupported message type %T in recording: %v", req, req)
 		}
@@ -529,6 +578,90 @@ func Replay(ctx context.Context, r *Recording, clients *Clients) (*Results, erro
 		return nil, fmt.Errorf("failed to gather results: %w", err)
 	}
 	return results, nil
+}
+
+var (
+	p4rtStreamName        = "p4rt"
+	p4rtDeviceID   uint64 = 1
+	p4rtElectionID uint64 = 1
+)
+
+func setupP4RTClient(client p4pb.P4RuntimeClient, p4Info *p4infopb.P4Info) (*p4rt_client.P4RTClient, error) {
+	if client == nil {
+		return nil, nil
+	}
+	p4Client := p4rt_client.NewP4RTClient(&p4rt_client.P4RTClientParameters{})
+	if err := p4Client.P4rtClientSet(client); err != nil {
+		return nil, fmt.Errorf("could not initialize p4rt client: %w", err)
+	}
+
+	// Create stream.
+	streamParams := &p4rt_client.P4RTStreamParameters{
+		Name:        p4rtStreamName,
+		DeviceId:    p4rtDeviceID,
+		ElectionIdH: 0,
+		ElectionIdL: p4rtElectionID,
+	}
+	if err := p4Client.StreamChannelCreate(streamParams); err != nil {
+		return nil, fmt.Errorf("could not create p4rt stream: %w", err)
+	}
+
+	// Send artibitration request to establish this client as primary.
+	arbitrationReq := &p4pb.StreamMessageRequest{
+		Update: &p4pb.StreamMessageRequest_Arbitration{
+			Arbitration: &p4pb.MasterArbitrationUpdate{
+				DeviceId:   p4rtDeviceID,
+				ElectionId: &p4pb.Uint128{High: 0, Low: p4rtElectionID},
+			},
+		},
+	}
+	if err := p4Client.StreamChannelSendMsg(&p4rtStreamName, arbitrationReq); err != nil {
+		return nil, fmt.Errorf("could not send ClientArbitration message: %v", err)
+	}
+
+	if _, _, arbErr := p4Client.StreamChannelGetArbitrationResp(&p4rtStreamName, 1); arbErr != nil {
+		if err := streamTermErr(p4Client.StreamTermErr); err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("got error in ClientArbitration response: %v", arbErr)
+	}
+
+	// Set P4Info.
+	if err := setP4Info(p4Client, p4Info); err != nil {
+		return nil, err
+	}
+
+	return p4Client, nil
+}
+
+func streamTermErr(ste <-chan *p4rt_client.P4RTStreamTermErr) error {
+	if ste == nil {
+		return nil
+	}
+	select {
+	case e := <-ste:
+		return e.StreamErr
+	default:
+		return nil
+	}
+}
+
+func setP4Info(client *p4rt_client.P4RTClient, p4Info *p4infopb.P4Info) error {
+	log.Infof("Setting forwarding pipeline config with P4Info: %v", prototext.Format(p4Info))
+	return client.SetForwardingPipelineConfig(&p4pb.SetForwardingPipelineConfigRequest{
+		DeviceId: p4rtDeviceID,
+		ElectionId: &p4pb.Uint128{
+			High: 0,
+			Low:  p4rtElectionID,
+		},
+		Action: p4pb.SetForwardingPipelineConfigRequest_RECONCILE_AND_COMMIT,
+		Config: &p4pb.ForwardingPipelineConfig{
+			P4Info: p4Info,
+			Cookie: &p4pb.ForwardingPipelineConfig_Cookie{
+				Cookie: 159,
+			},
+		},
+	})
 }
 
 func gatherResults(ctx context.Context, gRIBI *client.Client, results *Results) error {
@@ -759,6 +892,20 @@ func initSetReq(getResp *gnmipb.GetResponse) (*gnmipb.SetRequest, error) {
 	}
 
 	return ret, nil
+}
+
+func initialP4RTWriteReq(readResp *p4pb.ReadResponse) (*p4pb.WriteRequest, error) {
+	out := &p4pb.WriteRequest{
+		DeviceId:   p4rtDeviceID,
+		ElectionId: &p4pb.Uint128{Low: p4rtElectionID},
+	}
+	for _, entity := range readResp.GetEntities() {
+		out.Updates = append(out.Updates, &p4pb.Update{
+			Type:   p4pb.Update_INSERT,
+			Entity: entity,
+		})
+	}
+	return out, nil
 }
 
 // prettySetRequest returns a pretty-formatted SetRequest proto with its JSON values pretty-

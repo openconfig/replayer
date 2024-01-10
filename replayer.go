@@ -38,8 +38,8 @@ type Recording = internal.Recording
 // Results contains the results of replayed requests.
 type Results = internal.Results
 
-// Clients holds the RPC clients for g* protocols.
-type Clients = internal.Clients
+// Config holds configuration for the replay, including RPC clients for g* protocols.
+type Config = internal.Config
 
 // ParseFile parses a binary log at the specified file path.
 func ParseFile(t *testing.T, path string) *Recording {
@@ -85,9 +85,9 @@ func ParseBytes(t *testing.T, bytes []byte) *Recording {
 }
 
 // Replay sends the parsed record over the given gRIBI client.
-func Replay(ctx context.Context, t *testing.T, r *Recording, clients *Clients) *Results {
+func Replay(ctx context.Context, t *testing.T, r *Recording, config *Config) *Results {
 	t.Helper()
-	res, err := internal.Replay(ctx, r, clients)
+	res, err := internal.Replay(ctx, r, config)
 	if err != nil {
 		t.Errorf("Replay(): failed to replay log: %v", err)
 	}

@@ -617,7 +617,7 @@ func TestRemapInterfaces(t *testing.T) {
 			},
 		},
 		Val: jsonVal(t, jsonObj{
-			"interface": []jsonObj{
+			"openconfig-interfaces:interface": []jsonObj{
 				{
 					"name": "foo",
 					"config": jsonObj{
@@ -734,6 +734,86 @@ func TestTransformExtensions(t *testing.T) {
 	}
 }
 
+func TestTransformCommunityMembers(t *testing.T) {
+	update := &gnmipb.Update{
+		Path: &gnmipb.Path{
+			Elem: []*gnmipb.PathElem{
+				{Name: "routing-policy"},
+			},
+		},
+		Val: jsonVal(t, jsonObj{
+			"openconfig-routing-policy:defined-sets": jsonObj{
+				"openconfig-bgp-policy:bgp-defined-sets": jsonObj{
+					"community-sets": jsonObj{
+						"community-set": []jsonObj{
+							{
+								"config": jsonObj{
+									"community-member": []string{
+										"1234:5678",
+										"321:123",
+									},
+								},
+							},
+							{
+								"config": jsonObj{
+									"community-member": []string{
+										"999:111",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}),
+	}
+
+	want := &updates{
+		update: []*gnmipb.Update{
+			{
+				Path: &gnmipb.Path{
+					Elem: []*gnmipb.PathElem{
+						{Name: "routing-policy"},
+					},
+				},
+				Val: jsonVal(t, jsonObj{
+					"openconfig-routing-policy:defined-sets": jsonObj{
+						"openconfig-bgp-policy:bgp-defined-sets": jsonObj{
+							"community-sets": jsonObj{
+								"community-set": []jsonObj{
+									{
+										"config": jsonObj{
+											"community-member": []uint32{
+												asU32(1234, 5678),
+												asU32(321, 123),
+											},
+										},
+									},
+									{
+										"config": jsonObj{
+											"community-member": []uint32{
+												asU32(999, 111),
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				}),
+			},
+		},
+	}
+
+	got, err := transformUpdate(update, nil)
+	if err != nil {
+		t.Errorf("transformUpdate() got unexpected error: %v", err)
+	}
+	if diff := cmp.Diff(want, got, protocmp.Transform(), cmp.AllowUnexported(updates{})); diff != "" {
+		t.Errorf("transformUpdate() got unexpected result (-want +got):\n%s", diff)
+	}
+}
+
 func jsonVal(t *testing.T, j jsonObj) *gnmipb.TypedValue {
 	t.Helper()
 	jb, err := json.Marshal(j)
@@ -741,5 +821,5 @@ func jsonVal(t *testing.T, j jsonObj) *gnmipb.TypedValue {
 		t.Fatalf("json.Marshal() failed: %v", err)
 		return nil
 	}
-	return &gnmipb.TypedValue{Value: &gnmipb.TypedValue_JsonIetfVal{jb}}
+	return &gnmipb.TypedValue{Value: &gnmipb.TypedValue_JsonIetfVal{JsonIetfVal: jb}}
 }

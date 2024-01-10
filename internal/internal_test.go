@@ -17,6 +17,7 @@ package internal
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path"
@@ -24,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	log "github.com/golang/glog"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/openconfig/gribigo/client"
@@ -38,6 +40,7 @@ import (
 
 	gnmipb "github.com/openconfig/gnmi/proto/gnmi"
 	gribipb "github.com/openconfig/gribi/v1/proto/service"
+	p4infopb "github.com/p4lang/p4runtime/go/p4/config/v1"
 	p4pb "github.com/p4lang/p4runtime/go/p4/v1"
 )
 
@@ -93,6 +96,17 @@ func TestParse(t *testing.T) {
 									},
 								},
 							},
+						},
+					},
+					p4rt: &p4pb.ReadResponse{
+						Entities: []*p4pb.Entity{
+							{Entity: &p4pb.Entity_CounterEntry{CounterEntry: &p4pb.CounterEntry{
+								CounterId: 123,
+								Data: &p4pb.CounterData{
+									ByteCount:   456,
+									PacketCount: 789,
+								},
+							}}},
 						},
 					},
 				},
@@ -187,7 +201,7 @@ func TestParse(t *testing.T) {
 	}
 }
 
-func TestReplayiGRIBI(t *testing.T) {
+func TestReplayGRIBI(t *testing.T) {
 	tests := []struct {
 		desc      string
 		recording *Recording
@@ -212,6 +226,14 @@ func TestReplayiGRIBI(t *testing.T) {
 				},
 				{
 					CurrentServerElectionID: electionID,
+				},
+				{
+					OperationID:       1,
+					ProgrammingResult: gribipb.AFTResult_RIB_PROGRAMMED,
+					Details: &client.OpDetailsResults{
+						Type:         constants.Add,
+						NextHopIndex: 1,
+					},
 				},
 				{
 					OperationID:       1,
@@ -255,6 +277,14 @@ func TestReplayiGRIBI(t *testing.T) {
 				},
 				{
 					OperationID:       1,
+					ProgrammingResult: gribipb.AFTResult_RIB_PROGRAMMED,
+					Details: &client.OpDetailsResults{
+						Type:         constants.Add,
+						NextHopIndex: 1,
+					},
+				},
+				{
+					OperationID:       1,
 					ProgrammingResult: gribipb.AFTResult_FIB_PROGRAMMED,
 					Details: &client.OpDetailsResults{
 						Type:         constants.Add,
@@ -263,10 +293,26 @@ func TestReplayiGRIBI(t *testing.T) {
 				},
 				{
 					OperationID:       2,
+					ProgrammingResult: gribipb.AFTResult_RIB_PROGRAMMED,
+					Details: &client.OpDetailsResults{
+						Type:           constants.Add,
+						NextHopGroupID: 42,
+					},
+				},
+				{
+					OperationID:       2,
 					ProgrammingResult: gribipb.AFTResult_FIB_PROGRAMMED,
 					Details: &client.OpDetailsResults{
 						Type:           constants.Add,
 						NextHopGroupID: 42,
+					},
+				},
+				{
+					OperationID:       3,
+					ProgrammingResult: gribipb.AFTResult_RIB_PROGRAMMED,
+					Details: &client.OpDetailsResults{
+						Type:       constants.Add,
+						IPv4Prefix: "1.1.1.1/32",
 					},
 				},
 				{
@@ -304,10 +350,26 @@ func TestReplayiGRIBI(t *testing.T) {
 				},
 				{
 					OperationID:       1,
+					ProgrammingResult: gribipb.AFTResult_RIB_PROGRAMMED,
+					Details: &client.OpDetailsResults{
+						Type:         constants.Add,
+						NextHopIndex: 1,
+					},
+				},
+				{
+					OperationID:       1,
 					ProgrammingResult: gribipb.AFTResult_FIB_PROGRAMMED,
 					Details: &client.OpDetailsResults{
 						Type:         constants.Add,
 						NextHopIndex: 1,
+					},
+				},
+				{
+					OperationID:       2,
+					ProgrammingResult: gribipb.AFTResult_RIB_PROGRAMMED,
+					Details: &client.OpDetailsResults{
+						Type:           constants.Add,
+						NextHopGroupID: 2,
 					},
 				},
 				{
@@ -320,10 +382,26 @@ func TestReplayiGRIBI(t *testing.T) {
 				},
 				{
 					OperationID:       3,
+					ProgrammingResult: gribipb.AFTResult_RIB_PROGRAMMED,
+					Details: &client.OpDetailsResults{
+						Type:           constants.Add,
+						NextHopGroupID: 42,
+					},
+				},
+				{
+					OperationID:       3,
 					ProgrammingResult: gribipb.AFTResult_FIB_PROGRAMMED,
 					Details: &client.OpDetailsResults{
 						Type:           constants.Add,
 						NextHopGroupID: 42,
+					},
+				},
+				{
+					OperationID:       4,
+					ProgrammingResult: gribipb.AFTResult_RIB_PROGRAMMED,
+					Details: &client.OpDetailsResults{
+						Type:       constants.Add,
+						IPv4Prefix: "1.1.1.1/32",
 					},
 				},
 				{
@@ -342,7 +420,9 @@ func TestReplayiGRIBI(t *testing.T) {
 		t.Run(test.desc, func(t *testing.T) {
 			ctx := context.Background()
 
-			results, err := Replay(ctx, test.recording, newTestClients(ctx, t))
+			cfg, _ := newTestClients(ctx, t)
+			cfg.P4RT = nil
+			results, err := Replay(ctx, test.recording, cfg)
 			if err != nil {
 				t.Errorf("Replay() got unexpected error %v", err)
 			}
@@ -387,7 +467,9 @@ func TestReplayGRIBIErrors(t *testing.T) {
 		t.Run(test.desc, func(t *testing.T) {
 			ctx := context.Background()
 
-			_, err := Replay(ctx, test.recording, newTestClients(ctx, t))
+			cfg, _ := newTestClients(ctx, t)
+			cfg.P4RT = nil
+			_, err := Replay(ctx, test.recording, cfg)
 			if err == nil {
 				t.Fatalf("Replay() got no error, want error %q", test.wantErr)
 			}
@@ -471,7 +553,9 @@ func TestReplayGNMI(t *testing.T) {
 		t.Run(test.desc, func(t *testing.T) {
 			ctx := context.Background()
 
-			results, err := Replay(ctx, test.recording, newTestClients(ctx, t))
+			cfg, _ := newTestClients(ctx, t)
+			cfg.P4RT = nil
+			results, err := Replay(ctx, test.recording, cfg)
 			if err != nil {
 				t.Errorf("Replay() got unexpected error %v", err)
 			}
@@ -492,9 +576,128 @@ func TestReplayGNMIError(t *testing.T) {
 		events:   []*Event{{Message: &gnmipb.SetRequest{Prefix: &gnmipb.Path{Origin: "error"}}}},
 	}
 
-	_, err := Replay(ctx, rec, newTestClients(ctx, t))
+	cfg, _ := newTestClients(ctx, t)
+	cfg.P4RT = nil
+	_, err := Replay(ctx, rec, cfg)
 	if err == nil {
 		t.Errorf("Replay() want error, got nil")
+	}
+}
+
+func TestReplayP4RT(t *testing.T) {
+	ctx := context.Background()
+
+	p4Info := &p4infopb.P4Info{
+		PkgInfo: &p4infopb.PkgInfo{
+			Name:    "test p4info",
+			Version: "1234",
+		},
+	}
+	rec := &Recording{
+		snapshot: &snapshot{
+			p4rt: &p4pb.ReadResponse{
+				Entities: []*p4pb.Entity{
+					{
+						Entity: &p4pb.Entity_CounterEntry{
+							CounterEntry: &p4pb.CounterEntry{
+								CounterId: 123,
+								Index: &p4pb.Index{
+									Index: 456,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		events: []*Event{
+			{Message: &p4pb.PacketOut{Payload: []byte("first")}, Timestamp: time.Unix(123, 0)},
+			{Message: &p4pb.WriteRequest{
+				DeviceId: 2,
+				Updates: []*p4pb.Update{
+					{
+						Entity: &p4pb.Entity{
+							Entity: &p4pb.Entity_CounterEntry{
+								CounterEntry: &p4pb.CounterEntry{
+									CounterId: 555,
+									Index: &p4pb.Index{
+										Index: 777,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			},
+			{Message: &p4pb.PacketOut{Payload: []byte("second")}, Timestamp: time.Unix(456, 0)},
+		},
+	}
+
+	cfg, fakes := newTestClients(ctx, t)
+	cfg.P4Info = p4Info
+	_, err := Replay(ctx, rec, cfg)
+	if err != nil {
+		t.Errorf("Replay() got error: %v", err)
+	}
+
+	if diff := cmp.Diff(p4Info, fakes.p4rt.gotP4Info, protocmp.Transform()); diff != "" {
+		t.Errorf("Replay() got unexpected P4Info: (-want,+got): %v", diff)
+	}
+
+	wantWrite := []*p4pb.WriteRequest{
+		{
+			DeviceId:   1,
+			ElectionId: &p4pb.Uint128{Low: 1},
+			Updates: []*p4pb.Update{
+				{
+					Type: p4pb.Update_INSERT,
+					Entity: &p4pb.Entity{
+						Entity: &p4pb.Entity_CounterEntry{
+							CounterEntry: &p4pb.CounterEntry{
+								CounterId: 123,
+								Index: &p4pb.Index{
+									Index: 456,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			DeviceId:   1,
+			ElectionId: &p4pb.Uint128{Low: 1},
+			Updates: []*p4pb.Update{
+				{
+					Entity: &p4pb.Entity{
+						Entity: &p4pb.Entity_CounterEntry{
+							CounterEntry: &p4pb.CounterEntry{
+								CounterId: 555,
+								Index: &p4pb.Index{
+									Index: 777,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	if diff := cmp.Diff(wantWrite, fakes.p4rt.gotWrite, protocmp.Transform()); diff != "" {
+		t.Errorf("Replay() got unexpected P4 writes: (-want,+got): %v", diff)
+	}
+
+	wantPacketOut := []*p4pb.PacketOut{
+		{
+			Payload: []byte("first"),
+		},
+		{
+			Payload: []byte("second"),
+		},
+	}
+	if diff := cmp.Diff(wantPacketOut, fakes.p4rt.gotPacketOut, protocmp.Transform()); diff != "" {
+		t.Errorf("Replay() got unexpected P4 packet out: (-want,+got): %v", diff)
 	}
 }
 
@@ -516,39 +719,39 @@ func TestSetInterfaceMap(t *testing.T) {
 			recording: &Recording{
 				snapshot: &snapshot{
 					gnmiGet: gnmiGetFromJSONString(`
-				{"openconfig-interfaces:interfaces": {
-					"interface": [
-							{
-								"name": "foo1",
-								"openconfig-if-ethernet:ethernet": {
-									"config": {
-										"openconfig-if-aggregate:aggregate-id": "foo-bundle",
-										"port-speed": "100G"
-									}
-								}
-							},
-							{
-								"name": "foo2",
-								"openconfig-if-ethernet:ethernet": {
-									"config": {
-										"openconfig-if-aggregate:aggregate-id": "foo-bundle",
-										"port-speed": "200G"
-									}
-								}
-							},
-							{
-								"name": "not-relevant",
-								"openconfig-if-ethernet:ethernet": {
-									"config": {
-										"openconfig-if-aggregate:aggregate-id": "some-other-bundle",
-										"port-speed": "200G"
-									}
+					{"openconfig-interfaces:interfaces": {
+						"interface": [
+						{
+							"name": "foo1",
+							"openconfig-if-ethernet:ethernet": {
+								"config": {
+									"openconfig-if-aggregate:aggregate-id": "foo-bundle",
+									"port-speed": "100G"
 								}
 							}
+						},
+						{
+							"name": "foo2",
+							"openconfig-if-ethernet:ethernet": {
+								"config": {
+									"openconfig-if-aggregate:aggregate-id": "foo-bundle",
+									"port-speed": "200G"
+								}
+							}
+						},
+						{
+							"name": "not-relevant",
+							"openconfig-if-ethernet:ethernet": {
+								"config": {
+									"openconfig-if-aggregate:aggregate-id": "some-other-bundle",
+									"port-speed": "200G"
+								}
+							}
+						}
 						]
 					}
 				}
-			`),
+				`),
 					gribi: &gribipb.GetResponse{
 						Entry: []*gribipb.AFTEntry{
 							entryProto(t, fluent.NextHopEntry().WithInterfaceRef("foo-bundle").WithIndex(1).WithIPAddress("1.2.3.4").EntryProto),
@@ -594,39 +797,39 @@ func TestInterfaces(t *testing.T) {
 				},
 			},
 			gnmiGet: gnmiGetFromJSONString(`
-				{"openconfig-interfaces:interfaces": {
-					"interface": [
-							{
-								"name": "foo1",
-								"openconfig-if-ethernet:ethernet": {
-									"config": {
-										"openconfig-if-aggregate:aggregate-id": "foo-bundle",
-										"port-speed": "100G"
-									}
-								}
-							},
-							{
-								"name": "foo2",
-								"openconfig-if-ethernet:ethernet": {
-									"config": {
-										"openconfig-if-aggregate:aggregate-id": "foo-bundle",
-										"port-speed": "200G"
-									}
-								}
-							},
-							{
-								"name": "not-relevant",
-								"openconfig-if-ethernet:ethernet": {
-									"config": {
-										"openconfig-if-aggregate:aggregate-id": "some-other-bundle",
-										"port-speed": "200G"
-									}
-								}
-							}
-						]
+			{"openconfig-interfaces:interfaces": {
+				"interface": [
+				{
+					"name": "foo1",
+					"openconfig-if-ethernet:ethernet": {
+						"config": {
+							"openconfig-if-aggregate:aggregate-id": "foo-bundle",
+							"port-speed": "100G"
+						}
+					}
+				},
+				{
+					"name": "foo2",
+					"openconfig-if-ethernet:ethernet": {
+						"config": {
+							"openconfig-if-aggregate:aggregate-id": "foo-bundle",
+							"port-speed": "200G"
+						}
+					}
+				},
+				{
+					"name": "not-relevant",
+					"openconfig-if-ethernet:ethernet": {
+						"config": {
+							"openconfig-if-aggregate:aggregate-id": "some-other-bundle",
+							"port-speed": "200G"
+						}
 					}
 				}
-			`),
+				]
+			}
+		}
+		`),
 		},
 	}
 
@@ -691,8 +894,8 @@ func gnmiGetFromJSONString(json string) *gnmipb.GetResponse {
 	}
 }
 
-// newTestClients starts a fake gRIBI server and dials a client to  that server.
-func newTestClients(ctx context.Context, t *testing.T) *Clients {
+// newTestClients starts a server with fake grpc protocol handlers and returns clients to that server.
+func newTestClients(ctx context.Context, t *testing.T) (*Config, *fakes) {
 	t.Helper()
 	srv := grpc.NewServer(grpc.Creds(insecure.NewCredentials()))
 	s, err := server.NewFake(
@@ -703,10 +906,15 @@ func newTestClients(ctx context.Context, t *testing.T) *Clients {
 	}
 	s.InjectRIB(rib.New(server.DefaultNetworkInstanceName))
 
-	f := &fakeGNMI{}
+	f := &fakes{
+		gnmi:  &fakeGNMI{},
+		gribi: s,
+		p4rt:  &fakeP4RT{},
+	}
 
-	gribipb.RegisterGRIBIServer(srv, s)
-	gnmipb.RegisterGNMIServer(srv, f)
+	gribipb.RegisterGRIBIServer(srv, f.gribi)
+	gnmipb.RegisterGNMIServer(srv, f.gnmi)
+	p4pb.RegisterP4RuntimeServer(srv, f.p4rt)
 
 	addr := startServer(t, srv)
 
@@ -718,14 +926,21 @@ func newTestClients(ctx context.Context, t *testing.T) *Clients {
 	t.Cleanup(func() {
 		err := conn.Close()
 		if err != nil {
-			t.Logf("Error closing gRIBI test client: %v", err)
+			t.Logf("Error closing test clients: %v", err)
 		}
 	})
 
-	return &Clients{
+	return &Config{
 		GNMI:  gnmipb.NewGNMIClient(conn),
 		GRIBI: gribipb.NewGRIBIClient(conn),
-	}
+		P4RT:  p4pb.NewP4RuntimeClient(conn),
+	}, f
+}
+
+type fakes struct {
+	gnmi  *fakeGNMI
+	gribi *server.FakeServer
+	p4rt  *fakeP4RT
 }
 
 type fakeGNMI struct {
@@ -743,6 +958,56 @@ func (f *fakeGNMI) Set(ctx context.Context, req *gnmipb.SetRequest) (*gnmipb.Set
 		Prefix: req.GetPrefix(),
 	}
 	return resp, nil
+}
+
+type fakeP4RT struct {
+	p4pb.UnimplementedP4RuntimeServer
+
+	gotP4Info    *p4infopb.P4Info
+	gotWrite     []*p4pb.WriteRequest
+	gotPacketOut []*p4pb.PacketOut
+}
+
+func (f *fakeP4RT) StreamChannel(stream p4pb.P4Runtime_StreamChannelServer) error {
+	for {
+		in, err := stream.Recv()
+		if err == io.EOF {
+			return nil // client is done
+		}
+		if err != nil {
+			return err
+		}
+
+		resp := &p4pb.StreamMessageResponse{}
+		switch v := in.GetUpdate().(type) {
+		case *p4pb.StreamMessageRequest_Arbitration:
+			resp.Update = &p4pb.StreamMessageResponse_Arbitration{
+				Arbitration: &p4pb.MasterArbitrationUpdate{
+					DeviceId:   1,
+					ElectionId: &p4pb.Uint128{High: 0, Low: 1},
+				},
+			}
+		case *p4pb.StreamMessageRequest_Packet:
+			f.gotPacketOut = append(f.gotPacketOut, v.Packet)
+		default:
+			log.Errorf("Got unhandled stream message type %T: %v", v, v)
+		}
+
+		err = stream.Send(resp)
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func (f *fakeP4RT) SetForwardingPipelineConfig(ctx context.Context, req *p4pb.SetForwardingPipelineConfigRequest) (*p4pb.SetForwardingPipelineConfigResponse, error) {
+	f.gotP4Info = req.GetConfig().GetP4Info()
+	return &p4pb.SetForwardingPipelineConfigResponse{}, nil
+}
+
+func (f *fakeP4RT) Write(ctx context.Context, req *p4pb.WriteRequest) (*p4pb.WriteResponse, error) {
+	f.gotWrite = append(f.gotWrite, req)
+	return &p4pb.WriteResponse{}, nil
 }
 
 func entryProto(t *testing.T, f func() (*gribipb.AFTEntry, error)) *gribipb.AFTEntry {
