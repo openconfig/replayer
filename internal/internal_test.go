@@ -98,17 +98,6 @@ func TestParse(t *testing.T) {
 							},
 						},
 					},
-					p4rt: &p4pb.ReadResponse{
-						Entities: []*p4pb.Entity{
-							{Entity: &p4pb.Entity_CounterEntry{CounterEntry: &p4pb.CounterEntry{
-								CounterId: 123,
-								Data: &p4pb.CounterData{
-									ByteCount:   456,
-									PacketCount: 789,
-								},
-							}}},
-						},
-					},
 				},
 				events: []*Event{
 					{
@@ -594,22 +583,7 @@ func TestReplayP4RT(t *testing.T) {
 		},
 	}
 	rec := &Recording{
-		snapshot: &snapshot{
-			p4rt: &p4pb.ReadResponse{
-				Entities: []*p4pb.Entity{
-					{
-						Entity: &p4pb.Entity_CounterEntry{
-							CounterEntry: &p4pb.CounterEntry{
-								CounterId: 123,
-								Index: &p4pb.Index{
-									Index: 456,
-								},
-							},
-						},
-					},
-				},
-			},
-		},
+		snapshot: &snapshot{},
 		events: []*Event{
 			{Message: &p4pb.PacketOut{Payload: []byte("first")}, Timestamp: time.Unix(123, 0)},
 			{Message: &p4pb.WriteRequest{
@@ -622,6 +596,24 @@ func TestReplayP4RT(t *testing.T) {
 									CounterId: 555,
 									Index: &p4pb.Index{
 										Index: 777,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			},
+			{Message: &p4pb.WriteRequest{
+				DeviceId: 3,
+				Updates: []*p4pb.Update{
+					{
+						Entity: &p4pb.Entity{
+							Entity: &p4pb.Entity_CounterEntry{
+								CounterEntry: &p4pb.CounterEntry{
+									CounterId: 666,
+									Index: &p4pb.Index{
+										Index: 888,
 									},
 								},
 							},
@@ -647,26 +639,7 @@ func TestReplayP4RT(t *testing.T) {
 
 	wantWrite := []*p4pb.WriteRequest{
 		{
-			DeviceId:   1,
-			ElectionId: &p4pb.Uint128{Low: 1},
-			Updates: []*p4pb.Update{
-				{
-					Type: p4pb.Update_INSERT,
-					Entity: &p4pb.Entity{
-						Entity: &p4pb.Entity_CounterEntry{
-							CounterEntry: &p4pb.CounterEntry{
-								CounterId: 123,
-								Index: &p4pb.Index{
-									Index: 456,
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-		{
-			DeviceId:   1,
+			DeviceId:   2,
 			ElectionId: &p4pb.Uint128{Low: 1},
 			Updates: []*p4pb.Update{
 				{
@@ -676,6 +649,24 @@ func TestReplayP4RT(t *testing.T) {
 								CounterId: 555,
 								Index: &p4pb.Index{
 									Index: 777,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			DeviceId:   3,
+			ElectionId: &p4pb.Uint128{Low: 1},
+			Updates: []*p4pb.Update{
+				{
+					Entity: &p4pb.Entity{
+						Entity: &p4pb.Entity_CounterEntry{
+							CounterEntry: &p4pb.CounterEntry{
+								CounterId: 666,
+								Index: &p4pb.Index{
+									Index: 888,
 								},
 							},
 						},
@@ -979,18 +970,18 @@ func (f *fakeP4RT) StreamChannel(stream p4pb.P4Runtime_StreamChannelServer) erro
 		}
 
 		resp := &p4pb.StreamMessageResponse{}
-		switch v := in.GetUpdate().(type) {
+		switch in.GetUpdate().(type) {
 		case *p4pb.StreamMessageRequest_Arbitration:
 			resp.Update = &p4pb.StreamMessageResponse_Arbitration{
 				Arbitration: &p4pb.MasterArbitrationUpdate{
-					DeviceId:   1,
-					ElectionId: &p4pb.Uint128{High: 0, Low: 1},
+					DeviceId:   in.GetArbitration().GetDeviceId(),
+					ElectionId: in.GetArbitration().GetElectionId(),
 				},
 			}
 		case *p4pb.StreamMessageRequest_Packet:
-			f.gotPacketOut = append(f.gotPacketOut, v.Packet)
+			f.gotPacketOut = append(f.gotPacketOut, in.GetPacket())
 		default:
-			log.Errorf("Got unhandled stream message type %T: %v", v, v)
+			log.Errorf("Got unhandled stream message type %T: %v", in.GetUpdate(), in.GetUpdate())
 		}
 
 		err = stream.Send(resp)

@@ -20,9 +20,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/openconfig/replayer/internal"
 	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/encoding/prototext"
 	"google.golang.org/protobuf/proto"
 
 	lpb "github.com/openconfig/replayer/proto/log"
@@ -31,6 +36,7 @@ import (
 var (
 	file      string
 	transform bool
+	outputDir string
 )
 
 // New creates a new view command.
@@ -44,6 +50,8 @@ func New() *cobra.Command {
 	viewCmd.MarkFlagRequired("file")
 
 	viewCmd.Flags().BoolVar(&transform, "transform", false, "Whether or not to transform the log according to the replayer transformation logic. Transformed logs more accurately represent the events that will get sent by the replayer tool.")
+
+	viewCmd.Flags().StringVar(&outputDir, "output_dir", "", "Directory for outputting the log as textproto messages. If specified, each message will be output as a file in the directory, where each file name contains time timestamp and message type.")
 
 	return viewCmd
 }
@@ -62,6 +70,10 @@ func view(cmd *cobra.Command, args []string) error {
 	}
 	if err != nil {
 		return err
+	}
+
+	if outputDir != "" {
+		return outputLog(outputDir, l)
 	}
 
 	return runTUI(l)
@@ -133,4 +145,28 @@ func parseAndTransformLog(bytes []byte) ([]*internal.Event, error) {
 	}
 
 	return internal.GenerateReplayEvents(r)
+}
+
+func outputLog(dir string, events []*internal.Event) error {
+	if err := os.MkdirAll(dir, 0777); err != nil && !os.IsExist(err) {
+		return err
+	}
+
+	fmt.Printf("Outputting logs to directory: %s\n", dir)
+
+	padding := len(strconv.Itoa(len(events)))
+
+	for i, e := range events {
+		messageType := strings.TrimLeft(fmt.Sprintf("%T", e.Message), "*")
+		// File name format <0-pad event #>_<timestamp>_<message_type>.pb.txt
+		// This ensures each file name is unique and can be sorted by event number.
+		fileName := fmt.Sprintf("%0*d_%v_%v.pb.txt", padding, i, e.Timestamp.Format(time.RFC3339), messageType)
+		contents := prototext.Format(e.Message)
+
+		if err := os.WriteFile(path.Join(dir, fileName), []byte(contents), 0666); err != nil {
+			return err
+		}
+		fmt.Printf("Wrote file: %v\n", fileName)
+	}
+	return nil
 }
